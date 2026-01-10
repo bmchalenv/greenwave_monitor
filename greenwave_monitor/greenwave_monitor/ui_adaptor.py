@@ -55,30 +55,6 @@ ENABLED_SUFFIX = '.enabled'
 DEFAULT_TOLERANCE_PERCENT = 5.0
 
 
-def build_full_node_name(node_name: str, node_namespace: str, is_client: bool = False) -> str:
-    """Build full ROS node name from name and namespace."""
-    join_list = []
-    # Strip leading '/' from namespace to avoid double slashes when joining
-    if node_namespace and node_namespace != '/':
-        join_list.append(node_namespace.lstrip('/'))
-    if node_name:
-        join_list.append(node_name)
-    joined = '/'.join(join_list)
-    if not is_client:
-        return f'/{joined}'
-    return joined
-
-
-def make_freq_param(topic: str) -> str:
-    """Build frequency parameter name for a topic."""
-    return f'{TOPIC_PARAM_PREFIX}{topic}{FREQ_SUFFIX}'
-
-
-def make_tol_param(topic: str) -> str:
-    """Build tolerance parameter name for a topic."""
-    return f'{TOPIC_PARAM_PREFIX}{topic}{TOL_SUFFIX}'
-
-
 def _make_param(name: str, value) -> Parameter:
     """Create a Parameter message from a name and Python value (or ParameterValue)."""
     param = Parameter()
@@ -348,9 +324,9 @@ class GreenwaveUiAdaptor:
             is_monitoring = topic_name in self.ui_diagnostics
         new_enabled = not is_monitoring
         action = 'start' if new_enabled else 'stop'
+        enabled_param = f'{TOPIC_PARAM_PREFIX}{topic_name}{ENABLED_SUFFIX}'
 
         target_node = self._get_target_node_for_topic(topic_name)
-        enabled_param = f'{TOPIC_PARAM_PREFIX}{topic_name}{ENABLED_SUFFIX}'
         success, failures = set_ros_parameters(
             self.node, target_node, {enabled_param: new_enabled})
 
@@ -371,15 +347,15 @@ class GreenwaveUiAdaptor:
                                ) -> tuple[bool, str]:
         """Set or clear the expected frequency for a topic via parameters."""
         action = 'clear' if clear else 'set'
-
         target_node = self._get_target_node_for_topic(topic_name)
         params = {
-            make_freq_param(topic_name): float('nan') if clear else expected_hz,
-            make_tol_param(topic_name): DEFAULT_TOLERANCE_PERCENT if clear else tolerance_percent,
+            f'{TOPIC_PARAM_PREFIX}{topic_name}{FREQ_SUFFIX}':
+                float('nan') if clear else expected_hz,
+            f'{TOPIC_PARAM_PREFIX}{topic_name}{TOL_SUFFIX}':
+                DEFAULT_TOLERANCE_PERCENT if clear else tolerance_percent,
         }
 
         success, failures = set_ros_parameters(self.node, target_node, params)
-
         if not success:
             return False, f'Failed to {action} expected frequency: {"; ".join(failures)}'
 

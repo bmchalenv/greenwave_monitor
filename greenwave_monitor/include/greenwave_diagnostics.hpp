@@ -601,29 +601,25 @@ private:
     result.successful = true;
 
     std::vector<std::string> error_reasons;
-
     for (const auto & param : parameters) {
       // Ensure its one of the parameters for this topic
       if (param.get_name() != freq_param_name_ && param.get_name() != tol_param_name_ &&
-        param.get_name() != enabled_param_name_)
-      {
+          param.get_name() != enabled_param_name_) {
         continue;
       }
-
       // Reject parameter deletion attempts
       if (param.get_type() == rclcpp::ParameterType::PARAMETER_NOT_SET) {
         result.successful = false;
         error_reasons.push_back(param.get_name() + ": parameter deletion not supported");
         continue;
       }
-
-      // Enabled parameter
+      // Enabled parameter (must be a boolean)
       if (param.get_name() == enabled_param_name_ &&
           param.get_type() != rclcpp::ParameterType::PARAMETER_BOOL) {
         result.successful = false;
         error_reasons.push_back(param.get_name() + ": must be a boolean");
         continue;
-      // Frequency or tolerance parameter
+      // Frequency or tolerance parameter (must be a numeric type)
       } else if (param.get_name() == freq_param_name_ || param.get_name() == tol_param_name_) {
         auto potential_value = paramToDouble(param);
         if (!potential_value.has_value()) {
@@ -632,14 +628,14 @@ private:
             param.get_name() + ": must be a numeric type (int or double or NaN)");
           continue;
         }
-        // Frequency parameter
+        // Frequency parameter (must be positive or NaN)
         if (param.get_name() == freq_param_name_) {
           if (potential_value.value() <= 0.0 && !std::isnan(potential_value.value())) {
             result.successful = false;
             error_reasons.push_back(param.get_name() + ": must be positive or NaN");
             continue;
           }
-        // Tolerance parameter
+        // Tolerance parameter (must be non-negative)
         } else if (param.get_name() == tol_param_name_) {
           if (potential_value.value() < 0.0 || std::isnan(potential_value.value())) {
             result.successful = false;
@@ -649,13 +645,11 @@ private:
         }
       }
     }
-
     // Exit early if any parameters are invalid. No half changes.
     if (!error_reasons.empty()) {
       result.successful = false;
       result.reason = rcpputils::join(error_reasons, "; ");
     }
-
     // Execution of changes happens in onParameterEvent after parameters are committed
     return result;
   }
@@ -666,7 +660,6 @@ private:
     if (msg->node != node_.get_fully_qualified_name()) {
       return;
     }
-
     // Apply parameter changes
     auto apply_parameter_changes = [&](const auto & params) {
         for (const auto & param : params) {
@@ -684,19 +677,11 @@ private:
           // Frequency parameter
           } else if (param.name == freq_param_name_) {
             frequency_ = getNumericParameter(param.name).value_or(constants::kDefaultFrequencyHz);
-            if (std::isnan(frequency_) || frequency_ <= 0.0) {
-              clearExpectedDt();
-            } else {
-              setExpectedDt(frequency_, tolerance_);
-            }
+            updateExpectedDtFromParams();
           // Tolerance parameter
           } else if (param.name == tol_param_name_) {
             tolerance_ = getNumericParameter(param.name).value_or(constants::kDefaultTolerancePercent);
-            if (std::isnan(frequency_) || frequency_ <= 0.0) {
-              clearExpectedDt();
-            } else {
-              setExpectedDt(frequency_, tolerance_);
-            }
+            updateExpectedDtFromParams();
           }
         }
       };
@@ -710,6 +695,15 @@ private:
       return std::nullopt;
     }
     return paramToDouble(node_.get_parameter(param_name));
+  }
+
+  void updateExpectedDtFromParams()
+  {
+    if (std::isnan(frequency_) || frequency_ <= 0.0) {
+      clearExpectedDt();
+    } else {
+      setExpectedDt(frequency_, tolerance_);
+    }
   }
 
   static std::optional<double> paramToDouble(const rclcpp::Parameter & param)

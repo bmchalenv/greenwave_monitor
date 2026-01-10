@@ -25,7 +25,6 @@ import unittest
 
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus
 from greenwave_monitor.ui_adaptor import (
-    build_full_node_name,
     ENABLED_SUFFIX,
     FREQ_SUFFIX,
     get_ros_parameters,
@@ -56,6 +55,20 @@ TEST_CONFIGURATIONS = [
 MANAGE_TOPIC_TEST_CONFIG = TEST_CONFIGURATIONS[1]  # 100Hz imu
 MONITOR_NODE_NAME = 'test_greenwave_monitor'
 MONITOR_NODE_NAMESPACE = 'test_namespace'
+
+
+def build_full_node_name(node_name: str, node_namespace: str, is_client: bool = False) -> str:
+    """Build full ROS node name from name and namespace."""
+    join_list = []
+    # Strip leading '/' from namespace to avoid double slashes when joining
+    if node_namespace and node_namespace != '/':
+        join_list.append(node_namespace.lstrip('/'))
+    if node_name:
+        join_list.append(node_name)
+    joined = '/'.join(join_list)
+    if not is_client:
+        return f'/{joined}'
+    return joined
 
 
 def make_enabled_param(topic: str) -> str:
