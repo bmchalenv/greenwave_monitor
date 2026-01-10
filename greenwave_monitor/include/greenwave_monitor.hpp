@@ -70,8 +70,6 @@ private:
 
   void deferred_init();
 
-  void fetch_external_topic_map();
-
   bool add_topic(
     const std::string & topic, std::string & message);
 
