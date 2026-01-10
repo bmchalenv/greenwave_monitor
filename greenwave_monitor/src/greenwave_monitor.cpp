@@ -46,7 +46,7 @@ GreenwaveMonitor::GreenwaveMonitor(const rclcpp::NodeOptions & options)
 
   // Defer topic discovery to allow the ROS graph to settle before querying other nodes
   init_timer_ = this->create_wall_timer(
-    0ms, [this]() {
+    100ms, [this]() {
       init_timer_->cancel();
       deferred_init();
     });
@@ -72,7 +72,12 @@ void GreenwaveMonitor::deferred_init()
   // Set all topics in YAML and from param to enabled by default
   for (const auto & topic : all_topics) {
     std::string message;
-    this->set_parameter(rclcpp::Parameter(std::string(kTopicParamPrefix) + topic + kEnabledSuffix, true));
+    auto result = this->set_parameter(rclcpp::Parameter(
+      std::string(kTopicParamPrefix) + topic + kEnabledSuffix, true));
+    if (!result.successful) {
+      RCLCPP_ERROR(this->get_logger(), "Failed to set enabled parameter for topic %s: %s",
+                   topic.c_str(), result.reason.c_str());
+    }
   }
 }
 
