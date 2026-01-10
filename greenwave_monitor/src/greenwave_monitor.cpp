@@ -53,8 +53,9 @@ GreenwaveMonitor::GreenwaveMonitor(const rclcpp::NodeOptions & options)
 
 void GreenwaveMonitor::deferred_init()
 {
+  // Fetch external topic map to track which nodes are monitoring which topics
   fetch_external_topic_map();
-
+  // Get all topics from YAML and parameters
   std::set<std::string> all_topics = get_topics_from_parameters();
   auto topics_param = this->get_parameter("topics").as_string_array();
   for (const auto & topic : topics_param) {
@@ -62,20 +63,18 @@ void GreenwaveMonitor::deferred_init()
       all_topics.insert(topic);
     }
   }
-
-  for (const auto & topic : all_topics) {
-    std::string message;
-    add_topic(topic, message);
-  }
-
-  // Register parameter callbacks after initialization is complete
+  // Callback for accepting/rejecting parameter changes
   param_callback_handle_ = this->add_on_set_parameters_callback(
     std::bind(&GreenwaveMonitor::on_parameter_change, this, std::placeholders::_1));
-
   // Subscribe to parameter events to execute pending topic additions and track external monitoring
   param_event_sub_ = this->create_subscription<rcl_interfaces::msg::ParameterEvent>(
     "/parameter_events", 10,
     std::bind(&GreenwaveMonitor::on_parameter_event, this, std::placeholders::_1));
+  // Set all topics in YAML and from param to enabled by default
+  for (const auto & topic : all_topics) {
+    std::string message;
+    this->set_parameter(rclcpp::Parameter(std::string(greenwave_diagnostics::constants::kTopicParamPrefix) + topic + greenwave_diagnostics::constants::kEnabledSuffix, true));
+  }
 }
 
 void GreenwaveMonitor::topic_callback(
@@ -106,26 +105,16 @@ void GreenwaveMonitor::timer_callback()
 
 std::optional<std::string> parse_enabled_topic_param(const std::string & name)
 {
-  const std::string prefix = greenwave_diagnostics::constants::kTopicParamPrefix;
-  const std::string suffix = greenwave_diagnostics::constants::kEnabledSuffix;
-
-  if (name.rfind(prefix, 0) != 0) {
+  const auto & prefix = greenwave_diagnostics::constants::kTopicParamPrefix;
+  const auto & suffix = greenwave_diagnostics::constants::kEnabledSuffix;
+  size_t plen = std::strlen(prefix), slen = std::strlen(suffix);
+  if (name.size() <= plen + slen || name.rfind(prefix, 0) != 0 ||
+    name.compare(name.size() - slen, slen, suffix) != 0)
+  {
     return std::nullopt;
   }
-  if (name.size() <= prefix.size() + suffix.size()) {
-    return std::nullopt;
-  }
-  if (name.substr(name.size() - suffix.size()) != suffix) {
-    return std::nullopt;
-  }
-
-  std::string topic = name.substr(
-    prefix.size(), name.size() - prefix.size() - suffix.size());
-  if (topic.empty() || topic[0] != '/') {
-    return std::nullopt;
-  }
-
-  return topic;
+  std::string topic = name.substr(plen, name.size() - plen - slen);
+  return (!topic.empty() && topic[0] == '/') ? std::optional{topic} : std::nullopt;
 }
 
 rcl_interfaces::msg::SetParametersResult GreenwaveMonitor::on_parameter_change(
@@ -135,39 +124,42 @@ rcl_interfaces::msg::SetParametersResult GreenwaveMonitor::on_parameter_change(
   result.successful = true;
 
   for (const auto & param : parameters) {
+    // Ensure it matches greenwave_diagnostics.<topic>.enabled pattern
     auto topic_opt = parse_enabled_topic_param(param.get_name());
     if (!topic_opt.has_value()) {
       continue;
     }
-
+    const std::string & topic = topic_opt.value();
+    // Enabled parameter must be a boolean
     if (param.get_type() != rclcpp::ParameterType::PARAMETER_BOOL) {
       continue;
     }
-
-    const std::string & topic = topic_opt.value();
+    // Reject if already monitored by external node
+    auto it = external_topic_to_node_.find(topic);
+    if (it != external_topic_to_node_.end()) {
+      result.reason = "Topic being monitored by external node: " + it->second;
+      return result;
+    }
+    // Handle enabled parameter
     bool enabled = param.as_bool();
-
     if (enabled) {
-      // Skip if already monitored or already pending (prevents recursive additions)
-      if (greenwave_diagnostics_.find(topic) != greenwave_diagnostics_.end() ||
-        pending_validations_.find(topic) != pending_validations_.end())
-      {
-        continue;
-      }
-      // Allow 1 retry with 0.5s wait for publisher discovery
-      auto validation = validate_add_topic(topic, 1, 0.5);
-      if (!validation.valid) {
-        result.successful = false;
-        result.reason = validation.error_message;
+      // Reject if already monitored internally
+      if (greenwave_diagnostics_.find(topic) != greenwave_diagnostics_.end()) {
+        result.reason = "Topic already monitored: " + topic;
         return result;
       }
-      pending_validations_[topic] = validation;
+      // Reject if no message type found for topic
+      std::vector<rclcpp::TopicEndpointInfo> publishers;
+      publishers = this->get_publishers_info_by_topic(topic);
+      if (publishers.empty()) {
+        result.reason = "No publishers found for topic: " + topic;
+        return result;
+      }
+      // Store the type for use in add_topic
+      topic_to_type_[topic] = publishers[0].topic_type();
+    // Handle disabled (enabled=false) parameter
     } else {
-      if (external_topic_to_node_.find(topic) != external_topic_to_node_.end()) {
-        result.successful = false;
-        result.reason = "Topic being monitored by external node: " + external_topic_to_node_[topic];
-        return result;
-      }
+      // Reject if not being monitored internally
       if (greenwave_diagnostics_.find(topic) == greenwave_diagnostics_.end()) {
         result.successful = false;
         result.reason = "Topic not being monitored: " + topic;
@@ -192,35 +184,35 @@ void GreenwaveMonitor::on_parameter_event(
 void GreenwaveMonitor::internal_on_parameter_event(
   const rcl_interfaces::msg::ParameterEvent::SharedPtr msg)
 {
-  // Process new and changed parameters - execute pending topic additions and removals
-  auto process_params = [this](const auto & params) {
+  // Process new and changed parameters - execute topic additions and removals
+  auto apply_parameter_changes = [this](const auto & params) {
       for (const auto & param : params) {
+        // Ensure it matches greenwave_diagnostics.<topic>.enabled pattern
         auto topic_opt = parse_enabled_topic_param(param.name);
         if (!topic_opt.has_value()) {
           continue;
         }
-
+        // Do nothing if greenwave_diagnostics_ object for this topic exists
+        if (greenwave_diagnostics_.find(topic_opt.value()) != greenwave_diagnostics_.end()) {
+          continue;
+        }
+        // Extract topic name and enabled value
         const std::string & topic = topic_opt.value();
         bool enabled = param.value.bool_value;
         std::string message;
-
+        // Handle enabled=true parameter
         if (enabled) {
-          auto it = pending_validations_.find(topic);
-          if (it != pending_validations_.end()) {
-            auto validation = std::move(it->second);
-            pending_validations_.erase(it);
-            execute_add_topic(validation, message);
-            RCLCPP_INFO(this->get_logger(), "%s", message.c_str());
-          }
+          add_topic(topic, message);
+          RCLCPP_INFO(this->get_logger(), "%s", message.c_str());
+        // Handle enabled=false parameter
         } else {
           remove_topic(topic, message);
           RCLCPP_INFO(this->get_logger(), "%s", message.c_str());
         }
       }
     };
-
-  process_params(msg->new_parameters);
-  process_params(msg->changed_parameters);
+  apply_parameter_changes(msg->new_parameters);
+  apply_parameter_changes(msg->changed_parameters);
 }
 
 void GreenwaveMonitor::external_on_parameter_event(
@@ -332,73 +324,16 @@ bool GreenwaveMonitor::has_header_from_type(const std::string & type_name)
   return has_header;
 }
 
-TopicValidationResult GreenwaveMonitor::validate_add_topic(
-  const std::string & topic, int max_retries, double retry_period_s)
+bool GreenwaveMonitor::add_topic(
+  const std::string & topic, std::string & message)
 {
-  TopicValidationResult result;
-  result.topic = topic;
+  RCLCPP_INFO(this->get_logger(), "Adding subscription for topic '%s'", topic.c_str());
 
-  auto it = external_topic_to_node_.find(topic);
-  if (it != external_topic_to_node_.end()) {
-    result.error_message = "Topic already monitored by external node: " + it->second;
-    return result;
-  }
-
-  if (greenwave_diagnostics_.find(topic) != greenwave_diagnostics_.end()) {
-    result.error_message = "Topic already monitored: " + topic;
-    return result;
-  }
-
-  std::vector<rclcpp::TopicEndpointInfo> publishers;
-  for (int attempt = 0; attempt <= max_retries; ++attempt) {
-    try {
-      publishers = this->get_publishers_info_by_topic(topic);
-    } catch (const rclcpp::exceptions::RCLError & e) {
-      // Context may be invalid during shutdown
-      result.error_message = "Node context invalid (shutting down)";
-      return result;
-    }
-    if (!publishers.empty()) {
-      break;
-    }
-    if (attempt < max_retries) {
-      RCLCPP_INFO(
-        this->get_logger(),
-        "No publishers found for topic '%s', retrying in %.1fs (%d/%d)",
-        topic.c_str(), retry_period_s, attempt + 1, max_retries);
-      std::this_thread::sleep_for(
-        std::chrono::milliseconds(static_cast<int>(retry_period_s * 1000)));
-    }
-  }
-
-  if (publishers.empty()) {
-    result.error_message = "No publishers found for topic: " + topic;
-    return result;
-  }
-
-  result.valid = true;
-  result.message_type = publishers[0].topic_type();
-  return result;
-}
-
-bool GreenwaveMonitor::execute_add_topic(
-  const TopicValidationResult & validated, std::string & message)
-{
-  if (!validated.valid) {
-    message = validated.error_message;
+  auto type = topic_to_type_[topic];
+  if (type.empty()) {
+    message = "No type found for topic: " + topic;
     return false;
   }
-
-  const std::string & topic = validated.topic;
-  const std::string & type = validated.message_type;
-
-  // Guard against duplicate subscriptions from parameter re-set in GreenwaveDiagnostics
-  if (greenwave_diagnostics_.find(topic) != greenwave_diagnostics_.end()) {
-    message = "Topic already monitored: " + topic;
-    return true;
-  }
-
-  RCLCPP_INFO(this->get_logger(), "Adding subscription for topic '%s'", topic.c_str());
 
   auto sub = this->create_generic_subscription(
     topic,
@@ -422,19 +357,6 @@ bool GreenwaveMonitor::execute_add_topic(
   return true;
 }
 
-bool GreenwaveMonitor::add_topic(
-  const std::string & topic, std::string & message,
-  int max_retries, double retry_period_s)
-{
-  auto validation = validate_add_topic(topic, max_retries, retry_period_s);
-  if (!validation.valid) {
-    RCLCPP_ERROR(this->get_logger(), "%s", validation.error_message.c_str());
-    message = validation.error_message;
-    return false;
-  }
-  return execute_add_topic(validation, message);
-}
-
 bool GreenwaveMonitor::remove_topic(const std::string & topic, std::string & message)
 {
   auto diag_it = greenwave_diagnostics_.find(topic);
@@ -449,7 +371,6 @@ bool GreenwaveMonitor::remove_topic(const std::string & topic, std::string & mes
     [&topic](const auto & sub) {
       return sub->get_topic_name() == topic;
     });
-
   if (sub_it != subscriptions_.end()) {
     subscriptions_.erase(sub_it);
   }
@@ -465,9 +386,6 @@ bool GreenwaveMonitor::remove_topic(const std::string & topic, std::string & mes
 void GreenwaveMonitor::fetch_external_topic_map()
 {
   const std::string our_node = this->get_fully_qualified_name();
-  const std::string prefix = greenwave_diagnostics::constants::kTopicParamPrefix;
-  const std::string suffix = greenwave_diagnostics::constants::kEnabledSuffix;
-
   static uint64_t temp_node_counter = 0;
   rclcpp::NodeOptions temp_options;
   temp_options.start_parameter_services(false);
@@ -477,61 +395,34 @@ void GreenwaveMonitor::fetch_external_topic_map()
     "/_greenwave_internal",
     temp_options);
 
+  // Get all node names and iterate through them to find external nodes with enabled parameters
   auto node_names = this->get_node_names();
   for (const auto & full_name : node_names) {
     if (full_name == our_node) {
       continue;
     }
-
+    // Create parameter client for external node
     auto param_client = std::make_shared<rclcpp::SyncParametersClient>(
       temp_node, full_name);
     if (!param_client->wait_for_service(std::chrono::milliseconds(100))) {
       continue;
     }
-
+    // List parameters with "greenwave_diagnostics." prefix
     std::vector<std::string> param_names;
-    std::vector<rclcpp::Parameter> params;
-    try {
-      param_names = param_client->list_parameters({"greenwave_diagnostics"}, 10).names;
-      if (param_names.empty()) {
-        continue;
-      }
-      params = param_client->get_parameters(param_names);
-    } catch (const std::exception & e) {
-      RCLCPP_DEBUG(
-        this->get_logger(),
-        "Failed to query parameters from node '%s': %s",
-        full_name.c_str(), e.what());
+    param_names = param_client->list_parameters({"greenwave_diagnostics"}, 10).names;
+    if (param_names.empty()) {
       continue;
     }
-
+    // Iterate through parameters and track external nodes with enabled parameters
     for (size_t i = 0; i < param_names.size(); ++i) {
       const auto & name = param_names[i];
-      const auto & param = params[i];
-
-      if (name.rfind(prefix, 0) != 0) {
+      auto topic_opt = parse_enabled_topic_param(name);
+      if (!topic_opt.has_value()) {
         continue;
       }
-      if (name.size() <= prefix.size() + suffix.size()) {
-        continue;
-      }
-      if (name.substr(name.size() - suffix.size()) != suffix) {
-        continue;
-      }
-
-      std::string topic = name.substr(
-        prefix.size(), name.size() - prefix.size() - suffix.size());
-      if (topic.empty() || topic[0] != '/') {
-        continue;
-      }
-
-      if (param.get_type() == rclcpp::ParameterType::PARAMETER_BOOL && param.as_bool()) {
-        external_topic_to_node_[topic] = full_name;
-        RCLCPP_DEBUG(
-          this->get_logger(),
-          "Found external monitoring for topic '%s' on node '%s'",
-          topic.c_str(), full_name.c_str());
-      }
+      // Topic matches greenwave_diagnostics.<topic>.enabled pattern, track its node name
+      const std::string & topic = topic_opt.value();
+      external_topic_to_node_[topic] = full_name;
     }
   }
 }

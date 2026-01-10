@@ -33,13 +33,6 @@
 #include "rcl_interfaces/msg/parameter_event.hpp"
 #include "greenwave_diagnostics.hpp"
 
-struct TopicValidationResult
-{
-  bool valid = false;
-  std::string topic;
-  std::string message_type;
-  std::string error_message;
-};
 
 class GreenwaveMonitor : public rclcpp::Node
 {
@@ -75,18 +68,12 @@ private:
 
   void external_on_parameter_event(const rcl_interfaces::msg::ParameterEvent::SharedPtr msg);
 
-  TopicValidationResult validate_add_topic(
-    const std::string & topic, int max_retries = 5, double retry_period_s = 1.0);
-
-  bool execute_add_topic(const TopicValidationResult & validated, std::string & message);
-
   void deferred_init();
 
   void fetch_external_topic_map();
 
   bool add_topic(
-    const std::string & topic, std::string & message,
-    int max_retries = 5, double retry_period_s = 1.0);
+    const std::string & topic, std::string & message);
 
   bool remove_topic(const std::string & topic, std::string & message);
 
@@ -106,6 +93,6 @@ private:
   rclcpp::TimerBase::SharedPtr init_timer_;
   rclcpp::Subscription<rcl_interfaces::msg::ParameterEvent>::SharedPtr param_event_sub_;
   OnSetParametersCallbackHandle::SharedPtr param_callback_handle_;
-  std::unordered_map<std::string, TopicValidationResult> pending_validations_;
   std::unordered_map<std::string, std::string> external_topic_to_node_;
+  std::unordered_map<std::string, std::string> topic_to_type_;
 };

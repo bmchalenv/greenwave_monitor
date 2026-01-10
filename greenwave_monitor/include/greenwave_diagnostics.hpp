@@ -100,7 +100,7 @@ public:
     node_window_.window_size = diagnostics_config_.filter_window_size;
     msg_window_.window_size = diagnostics_config_.filter_window_size;
     diagnostic_msgs::msg::DiagnosticStatus topic_status;
-    topic_status.name = topic_name;
+    topic_status.name = std::string(node_.get_name()) + " " + topic_name;
     topic_status.hardware_id = "nvidia";
     topic_status.level = diagnostic_msgs::msg::DiagnosticStatus::WARN;
     topic_status.message = "UNDEFINED STATE";
@@ -312,6 +312,14 @@ public:
         diagnostic_msgs::build<diagnostic_msgs::msg::KeyValue>()
         .key("total_dropped_frames")
         .value(std::to_string(msg_window_.outlier_count)));
+      values.push_back(
+        diagnostic_msgs::build<diagnostic_msgs::msg::KeyValue>()
+        .key("expected_frequency")
+        .value(std::to_string(frequency_)));
+      values.push_back(
+        diagnostic_msgs::build<diagnostic_msgs::msg::KeyValue>()
+        .key("tolerance")
+        .value(std::to_string(tolerance_)));
     }
     status_vec_[0].values = values;
 
@@ -592,16 +600,10 @@ private:
     rcl_interfaces::msg::SetParametersResult result;
     result.successful = true;
 
-    std::optional<double> new_freq;
-    std::optional<double> new_tol;
-    std::optional<bool> new_enabled;
     std::vector<std::string> error_reasons;
 
-    //////////////////////////////////////////////////////////////////////////////
-    // Validate parameters
-    //////////////////////////////////////////////////////////////////////////////
     for (const auto & param : parameters) {
-      // Only handle parameters for this topic
+      // Ensure its one of the parameters for this topic
       if (param.get_name() != freq_param_name_ && param.get_name() != tol_param_name_ &&
         param.get_name() != enabled_param_name_)
       {
@@ -615,33 +617,36 @@ private:
         continue;
       }
 
-      // Handle numeric types together
-      if (param.get_name() == freq_param_name_ || param.get_name() == tol_param_name_) {
-        auto value_opt = paramToDouble(param);
-        if (!value_opt.has_value()) {
+      // Enabled parameter
+      if (param.get_name() == enabled_param_name_ &&
+          param.get_type() != rclcpp::ParameterType::PARAMETER_BOOL) {
+        result.successful = false;
+        error_reasons.push_back(param.get_name() + ": must be a boolean");
+        continue;
+      // Frequency or tolerance parameter
+      } else if (param.get_name() == freq_param_name_ || param.get_name() == tol_param_name_) {
+        auto potential_value = paramToDouble(param);
+        if (!potential_value.has_value()) {
           result.successful = false;
           error_reasons.push_back(
-            param.get_name() +
-            ": must be a numeric type (int or double or NaN)");
+            param.get_name() + ": must be a numeric type (int or double or NaN)");
           continue;
         }
-
-        double value = value_opt.value();
+        // Frequency parameter
         if (param.get_name() == freq_param_name_) {
-          if (value <= 0.0 && !std::isnan(value)) {
+          if (potential_value.value() <= 0.0 && !std::isnan(potential_value.value())) {
             result.successful = false;
             error_reasons.push_back(param.get_name() + ": must be positive or NaN");
+            continue;
           }
-          new_freq = value;
+        // Tolerance parameter
         } else if (param.get_name() == tol_param_name_) {
-          if (value < 0.0) {
+          if (potential_value.value() < 0.0 || std::isnan(potential_value.value())) {
             result.successful = false;
             error_reasons.push_back(param.get_name() + ": must be non-negative");
+            continue;
           }
-          new_tol = value;
         }
-      } else if (param.get_name() == enabled_param_name_) {
-        new_enabled = param.as_bool();
       }
     }
 
@@ -657,57 +662,46 @@ private:
 
   void onParameterEvent(const rcl_interfaces::msg::ParameterEvent::SharedPtr msg)
   {
-    // Only process events from this node
+    // Skip parameter events from other nodes
     if (msg->node != node_.get_fully_qualified_name()) {
       return;
     }
 
-    // Process changed and new parameters
-    bool freq_changed = false;
-    bool tol_changed = false;
-
-    auto process_params = [&](const auto & params) {
+    // Apply parameter changes
+    auto apply_parameter_changes = [&](const auto & params) {
         for (const auto & param : params) {
-          applyParameterChange(param);
-          if (param.name == freq_param_name_) {
-            freq_changed = true;
+          // Enabled parameter
+          if (param.name == enabled_param_name_) {
+            bool new_enabled = param.value.bool_value;
+            if (!new_enabled) {
+              const std::lock_guard<std::mutex> lock(greenwave_diagnostics_mutex_);
+              node_window_.clear();
+              msg_window_.clear();
+              prev_timestamp_node_us_ = std::numeric_limits<uint64_t>::min();
+              prev_timestamp_msg_us_ = std::numeric_limits<uint64_t>::min();
+            }
+            enabled_ = new_enabled;
+          // Frequency parameter
+          } else if (param.name == freq_param_name_) {
+            frequency_ = getNumericParameter(param.name).value_or(constants::kDefaultFrequencyHz);
+            if (std::isnan(frequency_) || frequency_ <= 0.0) {
+              clearExpectedDt();
+            } else {
+              setExpectedDt(frequency_, tolerance_);
+            }
+          // Tolerance parameter
           } else if (param.name == tol_param_name_) {
-            tol_changed = true;
+            tolerance_ = getNumericParameter(param.name).value_or(constants::kDefaultTolerancePercent);
+            if (std::isnan(frequency_) || frequency_ <= 0.0) {
+              clearExpectedDt();
+            } else {
+              setExpectedDt(frequency_, tolerance_);
+            }
           }
         }
       };
-    process_params(msg->changed_parameters);
-    process_params(msg->new_parameters);
-
-    // Update expected dt only if frequency or tolerance was explicitly changed
-    if (freq_changed || tol_changed) {
-      auto freq_opt = getNumericParameter(freq_param_name_);
-      auto tol_opt = getNumericParameter(tol_param_name_);
-      double freq = freq_opt.value_or(std::numeric_limits<double>::quiet_NaN());
-      double tol = tol_opt.value_or(constants::kDefaultTolerancePercent);
-
-      if (std::isnan(freq) || freq <= 0.0) {
-        clearExpectedDt();
-      } else {
-        setExpectedDt(freq, tol);
-      }
-    }
-  }
-
-  void applyParameterChange(const rcl_interfaces::msg::Parameter & param)
-  {
-    if (param.name == enabled_param_name_) {
-      bool new_enabled = param.value.bool_value;
-      if (!new_enabled) {
-        // Clear windows when disabling diagnostics
-        const std::lock_guard<std::mutex> lock(greenwave_diagnostics_mutex_);
-        node_window_.clear();
-        msg_window_.clear();
-        prev_timestamp_node_us_ = std::numeric_limits<uint64_t>::min();
-        prev_timestamp_msg_us_ = std::numeric_limits<uint64_t>::min();
-      }
-      enabled_ = new_enabled;
-    }
+    apply_parameter_changes(msg->changed_parameters);
+    apply_parameter_changes(msg->new_parameters);
   }
 
   std::optional<double> getNumericParameter(const std::string & param_name)
@@ -770,6 +764,8 @@ private:
 
   // Flag for indicating if message diagnostics are enabled for this topic
   bool enabled_{true};
+  double frequency_{constants::kDefaultFrequencyHz};
+  double tolerance_{constants::kDefaultTolerancePercent};
 };
 
 }  // namespace greenwave_diagnostics
