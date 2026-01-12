@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
-// Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,9 +20,9 @@
 #include <chrono>
 #include <map>
 #include <memory>
-#include <optional>
+#include <set>
 #include <string>
-#include <thread>
+#include <unordered_map>
 #include <vector>
 
 #include "rclcpp/rclcpp.hpp"
@@ -30,38 +30,54 @@
 #include "diagnostic_msgs/msg/diagnostic_array.hpp"
 #include "diagnostic_msgs/msg/diagnostic_status.hpp"
 #include "diagnostic_msgs/msg/key_value.hpp"
-#include "message_diagnostics.hpp"
-#include "greenwave_monitor_interfaces/srv/manage_topic.hpp"
-#include "greenwave_monitor_interfaces/srv/set_expected_frequency.hpp"
+#include "rcl_interfaces/msg/parameter_event.hpp"
+#include "greenwave_diagnostics.hpp"
+
 
 class GreenwaveMonitor : public rclcpp::Node
 {
 public:
   explicit GreenwaveMonitor(const rclcpp::NodeOptions & options);
+  ~GreenwaveMonitor()
+  {
+    // Cancel timers first to stop callbacks from firing
+    if (timer_) {
+      timer_->cancel();
+    }
+    if (init_timer_) {
+      init_timer_->cancel();
+    }
+    // Clear diagnostics before base Node destructor runs to avoid accessing invalid node state
+    greenwave_diagnostics_.clear();
+    subscriptions_.clear();
+  }
 
 private:
-  std::optional<std::string> find_topic_type_with_retry(
-    const std::string & topic, const int max_retries, const int retry_period_s);
-
   void topic_callback(
     const std::shared_ptr<rclcpp::SerializedMessage> msg,
     const std::string & topic, const std::string & type);
 
   void timer_callback();
 
-  void handle_manage_topic(
-    const std::shared_ptr<greenwave_monitor_interfaces::srv::ManageTopic::Request> request,
-    std::shared_ptr<greenwave_monitor_interfaces::srv::ManageTopic::Response> response);
+  rcl_interfaces::msg::SetParametersResult on_parameter_change(
+    const std::vector<rclcpp::Parameter> & parameters);
 
-  void handle_set_expected_frequency(
-    const std::shared_ptr<greenwave_monitor_interfaces::srv::SetExpectedFrequency::Request> request,
-    std::shared_ptr<greenwave_monitor_interfaces::srv::SetExpectedFrequency::Response> response);
+  void on_parameter_event(const rcl_interfaces::msg::ParameterEvent::SharedPtr msg);
 
-  bool add_topic(const std::string & topic, std::string & message);
+  void internal_on_parameter_event(const rcl_interfaces::msg::ParameterEvent::SharedPtr msg);
+
+  void external_on_parameter_event(const rcl_interfaces::msg::ParameterEvent::SharedPtr msg);
+
+  void deferred_init();
+
+  bool add_topic(
+    const std::string & topic, std::string & message);
 
   bool remove_topic(const std::string & topic, std::string & message);
 
   bool has_header_from_type(const std::string & type_name);
+
+  std::set<std::string> get_topics_from_parameters();
 
   std::chrono::time_point<std::chrono::system_clock>
   GetTimestampFromSerializedMessage(
@@ -69,11 +85,12 @@ private:
     const std::string & type);
 
   std::map<std::string,
-    std::unique_ptr<message_diagnostics::MessageDiagnostics>> message_diagnostics_;
+    std::unique_ptr<greenwave_diagnostics::GreenwaveDiagnostics>> greenwave_diagnostics_;
   std::vector<std::shared_ptr<rclcpp::GenericSubscription>> subscriptions_;
   rclcpp::TimerBase::SharedPtr timer_;
-  rclcpp::Service<greenwave_monitor_interfaces::srv::ManageTopic>::SharedPtr
-    manage_topic_service_;
-  rclcpp::Service<greenwave_monitor_interfaces::srv::SetExpectedFrequency>::SharedPtr
-    set_expected_frequency_service_;
+  rclcpp::TimerBase::SharedPtr init_timer_;
+  rclcpp::Subscription<rcl_interfaces::msg::ParameterEvent>::SharedPtr param_event_sub_;
+  OnSetParametersCallbackHandle::SharedPtr param_callback_handle_;
+  std::unordered_map<std::string, std::string> external_topic_to_node_;
+  std::unordered_map<std::string, std::string> topic_to_type_;
 };

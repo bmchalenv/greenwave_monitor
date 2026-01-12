@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 # SPDX-FileCopyrightText: NVIDIA CORPORATION & AFFILIATES
-# Copyright (c) 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Copyright (c) 2024-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,13 +17,23 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+from abc import ABC
 import math
 import time
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
+import unittest
 
 from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus
-from greenwave_monitor_interfaces.srv import ManageTopic, SetExpectedFrequency
+from greenwave_monitor.ui_adaptor import (
+    ENABLED_SUFFIX,
+    FREQ_SUFFIX,
+    get_ros_parameters,
+    set_ros_parameters,
+    TOL_SUFFIX,
+    TOPIC_PARAM_PREFIX,
+)
 import launch_ros
+from rcl_interfaces.msg import ParameterType, ParameterValue
 import rclpy
 from rclpy.node import Node
 
@@ -42,13 +52,64 @@ TEST_CONFIGURATIONS = [
 ]
 
 # Standard test constants
-MANAGE_TOPIC_TEST_CONFIG = TEST_CONFIGURATIONS[2]
+MANAGE_TOPIC_TEST_CONFIG = TEST_CONFIGURATIONS[1]  # 100Hz imu
 MONITOR_NODE_NAME = 'test_greenwave_monitor'
 MONITOR_NODE_NAMESPACE = 'test_namespace'
 
 
+def build_full_node_name(node_name: str, node_namespace: str, is_client: bool = False) -> str:
+    """Build full ROS node name from name and namespace."""
+    join_list = []
+    # Strip leading '/' from namespace to avoid double slashes when joining
+    if node_namespace and node_namespace != '/':
+        join_list.append(node_namespace.lstrip('/'))
+    if node_name:
+        join_list.append(node_name)
+    joined = '/'.join(join_list)
+    if not is_client:
+        return f'/{joined}'
+    return joined
+
+
+def make_enabled_param(topic: str) -> str:
+    """Build enabled parameter name for a topic."""
+    return f'{TOPIC_PARAM_PREFIX}{topic}{ENABLED_SUFFIX}'
+
+
+def set_parameter(test_node: Node, param_name: str, value,
+                  node_name: str = MONITOR_NODE_NAME,
+                  node_namespace: str = MONITOR_NODE_NAMESPACE,
+                  timeout_sec: float = 10.0) -> bool:
+    """Set a parameter on a node using rclpy service client."""
+    full_node_name = build_full_node_name(node_name, node_namespace)
+    success, _ = set_ros_parameters(test_node, full_node_name, {param_name: value}, timeout_sec)
+    return success
+
+
+def get_parameter(test_node: Node, param_name: str,
+                  node_name: str = MONITOR_NODE_NAME,
+                  node_namespace: str = MONITOR_NODE_NAMESPACE) -> Tuple[bool, Any]:
+    """Get a parameter from a node using rclpy service client."""
+    full_node_name = build_full_node_name(node_name, node_namespace)
+    result = get_ros_parameters(test_node, full_node_name, [param_name])
+    value = result.get(param_name)
+    return (value is not None, value)
+
+
+def delete_parameter(test_node: Node, param_name: str,
+                     node_name: str = MONITOR_NODE_NAME,
+                     node_namespace: str = MONITOR_NODE_NAMESPACE,
+                     timeout_sec: float = 10.0) -> bool:
+    """Delete a parameter from a node using rclpy service client."""
+    full_node_name = build_full_node_name(node_name, node_namespace)
+    not_set = ParameterValue(type=ParameterType.PARAMETER_NOT_SET)
+    success, _ = set_ros_parameters(test_node, full_node_name, {param_name: not_set}, timeout_sec)
+    return success
+
+
 def create_minimal_publisher(
-        topic: str, frequency_hz: float, message_type: str, id_suffix: str = ''):
+        topic: str, frequency_hz: float, message_type: str, id_suffix: str = '',
+        enable_diagnostics: bool = True):
     """Create a minimal publisher node with the given parameters."""
     return launch_ros.actions.Node(
         package='greenwave_monitor',
@@ -57,7 +118,8 @@ def create_minimal_publisher(
         parameters=[{
             'topic': topic,
             'frequency_hz': frequency_hz,
-            'message_type': message_type
+            'message_type': message_type,
+            'enable_greenwave_diagnostics': enable_diagnostics
         }],
         output='screen'
     )
@@ -65,19 +127,33 @@ def create_minimal_publisher(
 
 def create_monitor_node(namespace: str = MONITOR_NODE_NAMESPACE,
                         node_name: str = MONITOR_NODE_NAME,
-                        topics: List[str] = None):
+                        topics: List[str] = None,
+                        topic_configs: dict = None):
     """Create a greenwave_monitor node for testing."""
-    if topics is None:
-        topics = ['/test_topic']
+    params = {}
+
+    # Only add topics param if explicitly provided or no topic_configs
+    if topics is not None:
+        if not topics:
+            topics = ['']
+        params['topics'] = topics
+    elif not topic_configs:
+        params['topics'] = ['/test_topic']
+
+    if topic_configs:
+        for topic, config in topic_configs.items():
+            if 'expected_frequency' in config:
+                params[f'{TOPIC_PARAM_PREFIX}{topic}{FREQ_SUFFIX}'] = float(
+                    config['expected_frequency'])
+            if 'tolerance' in config:
+                params[f'{TOPIC_PARAM_PREFIX}{topic}{TOL_SUFFIX}'] = float(config['tolerance'])
 
     return launch_ros.actions.Node(
         package='greenwave_monitor',
         executable='greenwave_monitor',
         name=node_name,
         namespace=namespace,
-        parameters=[{
-            'topics': topics
-        }],
+        parameters=[params],
         output='screen'
     )
 
@@ -92,54 +168,6 @@ def wait_for_service_connection(node: Node,
         node.get_logger().error(
             f'Service "{service_name}" not available within {timeout_sec} seconds')
     return service_available
-
-
-def call_manage_topic_service(node: Node,
-                              service_client,
-                              add: bool,
-                              topic: str,
-                              timeout_sec: float = 8.0
-                              ) -> Optional[ManageTopic.Response]:
-    """Call the manage_topic service with given parameters."""
-    request = ManageTopic.Request()
-    request.add_topic = add
-    request.topic_name = topic
-    future = service_client.call_async(request)
-
-    rclpy.spin_until_future_complete(node, future, timeout_sec=timeout_sec)
-
-    if future.result() is None:
-        node.get_logger().error('Service call failed or timed out')
-        return None
-
-    return future.result()
-
-
-def call_set_frequency_service(node: Node,
-                               service_client,
-                               topic_name: str,
-                               expected_hz: float = 0.0,
-                               tolerance_percent: float = 0.0,
-                               clear: bool = False,
-                               add_if_missing: bool = True,
-                               timeout_sec: float = 8.0
-                               ) -> Optional[SetExpectedFrequency.Response]:
-    """Call the set_expected_frequency service with given parameters."""
-    request = SetExpectedFrequency.Request()
-    request.topic_name = topic_name
-    request.expected_hz = expected_hz
-    request.tolerance_percent = tolerance_percent
-    request.clear_expected = clear
-    request.add_topic_if_missing = add_if_missing
-
-    future = service_client.call_async(request)
-    rclpy.spin_until_future_complete(node, future, timeout_sec=timeout_sec)
-
-    if future.result() is None:
-        node.get_logger().error('Service call failed or timed out')
-        return None
-
-    return future.result()
 
 
 def collect_diagnostics_for_topic(node: Node,
@@ -265,15 +293,27 @@ def verify_diagnostic_values(status: DiagnosticStatus,
     return errors
 
 
-def create_service_clients(node: Node, namespace: str = MONITOR_NODE_NAMESPACE,
-                           node_name: str = MONITOR_NODE_NAME):
-    """Create service clients for the monitor node."""
-    manage_topic_client = node.create_client(
-        ManageTopic, f'/{namespace}/{node_name}/manage_topic'
-    )
+class RosNodeTestCase(unittest.TestCase, ABC):
+    """
+    Abstract base class for ROS 2 launch tests that need a test node.
 
-    set_frequency_client = node.create_client(
-        SetExpectedFrequency, f'/{namespace}/{node_name}/set_expected_frequency'
-    )
+    Subclasses must define the TEST_NODE_NAME class attribute to specify
+    the unique name for the test node.
+    """
 
-    return manage_topic_client, set_frequency_client
+    TEST_NODE_NAME: str = None
+
+    @classmethod
+    def setUpClass(cls):
+        """Initialize ROS 2 and create test node."""
+        if cls.TEST_NODE_NAME is None:
+            raise ValueError(
+                f'{cls.__name__} must define TEST_NODE_NAME class attribute')
+        rclpy.init()
+        cls.test_node = Node(cls.TEST_NODE_NAME, namespace=MONITOR_NODE_NAMESPACE)
+
+    @classmethod
+    def tearDownClass(cls):
+        """Clean up ROS 2."""
+        cls.test_node.destroy_node()
+        rclpy.shutdown()
