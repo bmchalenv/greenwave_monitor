@@ -59,6 +59,7 @@ struct GreenwaveDiagnosticsConfig
   bool enable_node_time_diagnostics{false};
   bool enable_msg_time_diagnostics{false};
   bool enable_increasing_msg_time_diagnostics{false};
+  bool enable_increasing_node_time_diagnostics{false};
 
   // enable basic diagnostics for all topics, triggered by an environment variable
   bool enable_all_topic_diagnostics{false};
@@ -83,23 +84,28 @@ public:
   : node_(node), topic_name_(topic_name), diagnostics_config_(diagnostics_config)
   {
     clock_ = node_.get_clock();
-    node_window_.window_size = diagnostics_config_.filter_window_size;
-    msg_window_.window_size = diagnostics_config_.filter_window_size;
+
+    node_source_.label = "Node Time";
+    node_source_.check_fps = diagnostics_config_.enable_node_time_diagnostics;
+    node_source_.window.window_size = diagnostics_config_.filter_window_size;
+    node_source_.prev_drop_ts = rclcpp::Time(0, 0, clock_->get_clock_type());
+
+    msg_source_.label = "Message Timestamp";
+    msg_source_.check_fps = diagnostics_config_.enable_msg_time_diagnostics;
+    msg_source_.check_increasing = diagnostics_config_.enable_increasing_msg_time_diagnostics;
+    msg_source_.window.window_size = diagnostics_config_.filter_window_size;
+    msg_source_.prev_drop_ts = rclcpp::Time(0, 0, clock_->get_clock_type());
+    msg_source_.prev_noninc_ts = rclcpp::Time(0, 0, clock_->get_clock_type());
+
     diagnostic_msgs::msg::DiagnosticStatus topic_status;
     topic_status.name = topic_name;
     topic_status.hardware_id = "nvidia";
     topic_status.level = diagnostic_msgs::msg::DiagnosticStatus::WARN;
     topic_status.message = "UNDEFINED STATE";
     status_vec_.push_back(topic_status);
-    deadlines_missed_since_last_pub_ = 0;
 
     t_start_ = clock_->now();
 
-    prev_drop_ts_ = rclcpp::Time(0, 0, clock_->get_clock_type());
-    prev_noninc_msg_ts_ = rclcpp::Time(0, 0, clock_->get_clock_type());
-    prev_timestamp_node_us_ = std::numeric_limits<uint64_t>::min();
-    prev_timestamp_msg_us_ = std::numeric_limits<uint64_t>::min();
-    num_non_increasing_msg_ = 0;
     message_latency_msg_ms_ = 0;
     outdated_msg_ = true;
 
@@ -111,61 +117,38 @@ public:
   // Update diagnostics numbers. To be called in Subscriber and Publisher
   void updateDiagnostics(uint64_t msg_timestamp_ns)
   {
-    // Mutex lock to prevent simultaneous access of common parameters
-    // used by updateDiagnostics() and publishDiagnostics()
     const std::lock_guard<std::mutex> lock(greenwave_diagnostics_mutex_);
-    // Message diagnostics checks message intervals both using the node clock
-    // and the message timestamp.
-    // All variables name _node refers to the node timestamp checks.
-    // All variables name _msg refers to the message timestamp checks.
     status_vec_[0].message = "";
     bool error_found = false;
 
-    // Get the current timestamps in microseconds
-    uint64_t current_timestamp_msg_us =
-      msg_timestamp_ns / greenwave_diagnostics::constants::kMicrosecondsToNanoseconds;
-    uint64_t current_timestamp_node_us = static_cast<uint64_t>(clock_->now().nanoseconds() /
-      greenwave_diagnostics::constants::kMicrosecondsToNanoseconds);
+    const bool has_msg_timestamp = (msg_timestamp_ns != 0);
+    const uint64_t current_timestamp_msg_us = has_msg_timestamp ?
+      msg_timestamp_ns / constants::kMicrosecondsToNanoseconds : 0;
+    const uint64_t current_timestamp_node_us = static_cast<uint64_t>(
+      clock_->now().nanoseconds() / constants::kMicrosecondsToNanoseconds);
 
-    // we can only calculate frame rate after 2 messages have been received
-    if (prev_timestamp_node_us_ != std::numeric_limits<uint64_t>::min()) {
-      const int64_t timestamp_diff_node_us = current_timestamp_node_us - prev_timestamp_node_us_;
-      node_window_.addInterarrival(timestamp_diff_node_us);
-      if (diagnostics_config_.enable_node_time_diagnostics) {
-        error_found |= updateNodeTimeDiagnostics(timestamp_diff_node_us);
-      }
+    // Node time source
+    error_found |= checkTimeSource(node_source_,
+      diagnostics_config_.enable_node_time_diagnostics,
+      current_timestamp_node_us);
+
+    // Message time source (header-bearing messages only)
+    if (has_msg_timestamp) {
+      error_found |= checkTimeSource(msg_source_,
+        diagnostics_config_.enable_msg_time_diagnostics,
+        current_timestamp_msg_us);
     }
 
-    const rclcpp::Time time_from_node = node_.get_clock()->now();
-    uint64_t ros_node_system_time_us = time_from_node.nanoseconds() /
-      greenwave_diagnostics::constants::kMicrosecondsToNanoseconds;
-
-    const double latency_wrt_current_timestamp_node_ms =
+    // Latency
+    const uint64_t ros_node_system_time_us = static_cast<uint64_t>(
+      clock_->now().nanoseconds() / constants::kMicrosecondsToNanoseconds);
+    message_latency_msg_ms_ =
       static_cast<double>(ros_node_system_time_us - current_timestamp_msg_us) /
-      greenwave_diagnostics::constants::kMillisecondsToMicroseconds;
-
-    if (prev_timestamp_msg_us_ != std::numeric_limits<uint64_t>::min()) {
-      const int64_t timestamp_diff_msg_us = current_timestamp_msg_us - prev_timestamp_msg_us_;
-      msg_window_.addInterarrival(timestamp_diff_msg_us);
-      // Do the same checks as above, but for message timestamp
-      if (diagnostics_config_.enable_msg_time_diagnostics) {
-        error_found |= updateMsgTimeDiagnostics(timestamp_diff_msg_us);
-      }
-      if (diagnostics_config_.enable_increasing_msg_time_diagnostics) {
-        error_found |= updateIncreasingMsgTimeDiagnostics(current_timestamp_msg_us);
-      }
-    }
-
-    prev_timestamp_node_us_ = current_timestamp_node_us;
-    prev_timestamp_msg_us_ = current_timestamp_msg_us;
-
-    // calculate key values for diagnostics status (computed on publish/getters)
-    message_latency_msg_ms_ = latency_wrt_current_timestamp_node_ms;
-    if (message_latency_msg_ms_ > greenwave_diagnostics::constants::kNonsenseLatencyMs) {
+      constants::kMillisecondsToMicroseconds;
+    if (message_latency_msg_ms_ > constants::kNonsenseLatencyMs) {
       message_latency_msg_ms_ = std::numeric_limits<double>::quiet_NaN();
     }
 
-    // frame dropping warnings
     if (!error_found) {
       status_vec_[0].level = diagnostic_msgs::msg::DiagnosticStatus::OK;
       status_vec_[0].message = "OK";
@@ -189,35 +172,35 @@ public:
       values.push_back(
         diagnostic_msgs::build<diagnostic_msgs::msg::KeyValue>()
         .key("num_non_increasing_msg")
-        .value(std::to_string(num_non_increasing_msg_)));
+        .value(std::to_string(msg_source_.num_non_increasing)));
       values.push_back(
         diagnostic_msgs::build<diagnostic_msgs::msg::KeyValue>()
         .key("num_jitter_outliers_msg")
-        .value(std::to_string(msg_window_.outlier_count)));
+        .value(std::to_string(msg_source_.window.outlier_count)));
       values.push_back(
         diagnostic_msgs::build<diagnostic_msgs::msg::KeyValue>()
         .key("num_jitter_outliers_node")
-        .value(std::to_string(node_window_.outlier_count)));
+        .value(std::to_string(node_source_.window.outlier_count)));
       values.push_back(
         diagnostic_msgs::build<diagnostic_msgs::msg::KeyValue>()
         .key("max_abs_jitter_msg")
-        .value(std::to_string(msg_window_.max_abs_jitter_us)));
+        .value(std::to_string(msg_source_.window.max_abs_jitter_us)));
       values.push_back(
         diagnostic_msgs::build<diagnostic_msgs::msg::KeyValue>()
         .key("max_abs_jitter_node")
-        .value(std::to_string(node_window_.max_abs_jitter_us)));
+        .value(std::to_string(node_source_.window.max_abs_jitter_us)));
       values.push_back(
         diagnostic_msgs::build<diagnostic_msgs::msg::KeyValue>()
         .key("mean_abs_jitter_msg")
-        .value(std::to_string(msg_window_.meanAbsJitterUs())));
+        .value(std::to_string(msg_source_.window.meanAbsJitterUs())));
       values.push_back(
         diagnostic_msgs::build<diagnostic_msgs::msg::KeyValue>()
         .key("mean_abs_jitter_node")
-        .value(std::to_string(node_window_.meanAbsJitterUs())));
+        .value(std::to_string(node_source_.window.meanAbsJitterUs())));
       values.push_back(
         diagnostic_msgs::build<diagnostic_msgs::msg::KeyValue>()
         .key("frame_rate_msg")
-        .value(std::to_string(msg_window_.frameRateHz())));
+        .value(std::to_string(msg_source_.window.frameRateHz())));
       values.push_back(
         diagnostic_msgs::build<diagnostic_msgs::msg::KeyValue>()
         .key("current_delay_from_realtime_ms")
@@ -227,11 +210,11 @@ public:
       values.push_back(
         diagnostic_msgs::build<diagnostic_msgs::msg::KeyValue>()
         .key("frame_rate_node")
-        .value(std::to_string(node_window_.frameRateHz())));
+        .value(std::to_string(node_source_.window.frameRateHz())));
       values.push_back(
         diagnostic_msgs::build<diagnostic_msgs::msg::KeyValue>()
         .key("total_dropped_frames")
-        .value(std::to_string(msg_window_.outlier_count)));
+        .value(std::to_string(msg_source_.window.outlier_count)));
       values.push_back(
         diagnostic_msgs::build<diagnostic_msgs::msg::KeyValue>()
         .key("expected_frequency")
@@ -265,12 +248,12 @@ public:
 
   double getFrameRateNode() const
   {
-    return node_window_.frameRateHz();
+    return node_source_.window.frameRateHz();
   }
 
   double getFrameRateMsg() const
   {
-    return msg_window_.frameRateHz();
+    return msg_source_.window.frameRateHz();
   }
 
   double getLatency() const
@@ -283,6 +266,8 @@ public:
     const std::lock_guard<std::mutex> lock(greenwave_diagnostics_mutex_);
     diagnostics_config_.enable_node_time_diagnostics = true;
     diagnostics_config_.enable_msg_time_diagnostics = true;
+    node_source_.check_fps = true;
+    msg_source_.check_fps = true;
 
     // This prevents accidental 0 division in the calculations in case of
     // a direct function call (not from service in greenwave_monitor.cpp)
@@ -314,6 +299,8 @@ public:
     const std::lock_guard<std::mutex> lock(greenwave_diagnostics_mutex_);
     diagnostics_config_.enable_node_time_diagnostics = false;
     diagnostics_config_.enable_msg_time_diagnostics = false;
+    node_source_.check_fps = false;
+    msg_source_.check_fps = false;
 
     diagnostics_config_.expected_dt_us = 0;
     diagnostics_config_.jitter_tolerance_us = 0;
@@ -378,6 +365,26 @@ private:
       return sum_jitter_abs_us / static_cast<int64_t>(jitter_abs_us.size());
     }
   };
+
+  struct TimeSourceState
+  {
+    // Per-source identity and behavior (set at construction)
+    std::string label;
+    bool check_fps{false};
+    bool check_increasing{false};
+    std::string drop_error_message{"FRAME DROP DETECTED"};
+    std::string increasing_error_message{"NONINCREASING TIMESTAMP"};
+
+    // Rolling statistics
+    RollingWindow window;
+
+    // Tracking state
+    uint64_t prev_timestamp_us{std::numeric_limits<uint64_t>::min()};
+    rclcpp::Time prev_drop_ts;    // last deadline miss
+    rclcpp::Time prev_noninc_ts;  // last increasing timestamp violation
+    uint64_t num_non_increasing{0};
+  };
+
   // Mutex lock to prevent simultaneous access of common parameters
   // used by updateDiagnostics() and publishDiagnostics()
   std::mutex greenwave_diagnostics_mutex_;
@@ -388,13 +395,10 @@ private:
   std::vector<diagnostic_msgs::msg::DiagnosticStatus> status_vec_;
   rclcpp::Clock::SharedPtr clock_;
   rclcpp::Time t_start_;
-  rclcpp::Time prev_drop_ts_, prev_noninc_msg_ts_;
-  uint64_t prev_timestamp_node_us_, prev_timestamp_msg_us_;
 
-  RollingWindow node_window_;
-  RollingWindow msg_window_;
-  uint64_t num_non_increasing_msg_;
-  uint64_t deadlines_missed_since_last_pub_;
+  TimeSourceState node_source_;
+  TimeSourceState msg_source_;
+
   double message_latency_msg_ms_;
   bool outdated_msg_;
   rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr diagnostic_publisher_;
@@ -408,100 +412,71 @@ private:
     }
   }
 
-  // Update node (pub/sub) time diagnostics
-  bool updateNodeTimeDiagnostics(const int64_t timestamp_diff_node_us)
+  bool checkTimeSource(
+    TimeSourceState & source,
+    bool enabled,
+    uint64_t current_timestamp_us)
   {
     bool error_found = false;
-    if (diagnostics_config_.expected_dt_us <= 0) {
-      return error_found;
+    if (source.prev_timestamp_us == std::numeric_limits<uint64_t>::min()) {
+      source.prev_timestamp_us = current_timestamp_us;
+      return false;
     }
-    // calculate difference between time between msgs(using node clock)
-    // and expected time between msgs
-    const int64_t expected_dt_us_node = diagnostics_config_.expected_dt_us;
-    const int64_t diff_node_us = timestamp_diff_node_us - expected_dt_us_node;
-    const int64_t abs_jitter_node = std::abs(diff_node_us);
-    const bool missed_deadline_node =
-      node_window_.addJitter(abs_jitter_node, diagnostics_config_.jitter_tolerance_us);
-    if (missed_deadline_node) {
-      RCLCPP_DEBUG(
-        node_.get_logger(),
-        "[GreenwaveDiagnostics Node Time]"
-        " Difference of time between messages(%" PRId64 ") and expected time between"
-        " messages(%" PRId64 ") is out of tolerance(%" PRId64 ") by %" PRId64 " for topic %s."
-        " Units are microseconds.",
-        static_cast<int64_t>(timestamp_diff_node_us),
-        expected_dt_us_node,
-        static_cast<int64_t>(diagnostics_config_.jitter_tolerance_us),
-        abs_jitter_node, topic_name_.c_str());
-    }
-    return error_found;
-  }
+    const int64_t timestamp_diff_us =
+      static_cast<int64_t>(current_timestamp_us - source.prev_timestamp_us);
+    source.window.addInterarrival(timestamp_diff_us);
 
-  bool updateMsgTimeDiagnostics(const int64_t timestamp_diff_msg_us)
-  {
-    bool error_found = false;
-    if (diagnostics_config_.expected_dt_us <= 0) {
-      return error_found;
-    }
-    // calculate difference between time between msgs(using msg clock)
-    // and expected time between msgs
-    const int64_t expected_dt_us_msg = diagnostics_config_.expected_dt_us;
-    const int64_t diff_msg_us = timestamp_diff_msg_us - expected_dt_us_msg;
-    const int64_t abs_jitter_msg = std::abs(diff_msg_us);
-    const bool missed_deadline_msg =
-      msg_window_.addJitter(abs_jitter_msg, diagnostics_config_.jitter_tolerance_us);
-    if (missed_deadline_msg) {
-      deadlines_missed_since_last_pub_++;
-      prev_drop_ts_ = clock_->now();
-      RCLCPP_DEBUG(
-        node_.get_logger(),
-        "[GreenwaveDiagnostics Message Timestamp]"
-        " Difference of time between messages(%" PRId64 ") and expected "
-        "time between"
-        " messages(%" PRId64 ") is out of tolerance(%" PRId64 ") by %" PRId64 " for topic %s. "
-        "Units are microseconds.",
-        static_cast<int64_t>(timestamp_diff_msg_us),
-        expected_dt_us_msg,
-        static_cast<int64_t>(diagnostics_config_.jitter_tolerance_us),
-        abs_jitter_msg, topic_name_.c_str());
+    if (!enabled || !source.check_fps || diagnostics_config_.expected_dt_us <= 0) {
+      source.prev_timestamp_us = current_timestamp_us;
+      return false;
     }
 
-    if (prev_drop_ts_.nanoseconds() != 0) {
-      auto time_since_drop = (clock_->now() - prev_drop_ts_).seconds();
-      if (time_since_drop < greenwave_diagnostics::constants::kDropWarnTimeoutSeconds) {
+    // FPS / jitter check
+    const int64_t diff_us = timestamp_diff_us - diagnostics_config_.expected_dt_us;
+    const int64_t abs_jitter_us = std::abs(diff_us);
+    const bool missed_deadline =
+      source.window.addJitter(abs_jitter_us, diagnostics_config_.jitter_tolerance_us);
+    if (missed_deadline) {
+      source.prev_drop_ts = clock_->now();
+      RCLCPP_DEBUG(node_.get_logger(),
+        "[GreenwaveDiagnostics %s] dt(%" PRId64 ") expected(%" PRId64
+        ") tolerance(%" PRId64 ") excess(%" PRId64 ") topic %s. Units: microseconds.",
+        source.label.c_str(), timestamp_diff_us, diagnostics_config_.expected_dt_us,
+        diagnostics_config_.jitter_tolerance_us, abs_jitter_us, topic_name_.c_str());
+    }
+    if (source.prev_drop_ts.nanoseconds() != 0) {
+      if ((clock_->now() - source.prev_drop_ts).seconds() <
+        constants::kDropWarnTimeoutSeconds)
+      {
         error_found = true;
         status_vec_[0].level = diagnostic_msgs::msg::DiagnosticStatus::ERROR;
-        deadlines_missed_since_last_pub_ = 0;
-        update_status_message(status_vec_[0], "FRAME DROP DETECTED");
+        update_status_message(status_vec_[0], source.drop_error_message);
       }
     }
-    return error_found;
-  }
 
-  bool updateIncreasingMsgTimeDiagnostics(const uint64_t current_timestamp_msg_us)
-  {
-    bool error_found = false;
-    // Check if message timestamp is increasing
-    if (current_timestamp_msg_us <= prev_timestamp_msg_us_) {
-      // Increment non increasing message count
-      num_non_increasing_msg_++;
-      prev_noninc_msg_ts_ = clock_->now();
-      RCLCPP_WARN(
-        node_.get_logger(),
-        "[GreenwaveDiagnostics Message Timestamp Non Increasing]"
-        " Message timestamp is not increasing. Current timestamp: %" PRIu64 ", "
-        " Previous timestamp: %" PRIu64 " for topic %s. Units are microseconds.",
-        current_timestamp_msg_us, prev_timestamp_msg_us_, topic_name_.c_str());
-    }
-    if (prev_noninc_msg_ts_.nanoseconds() != 0) {
-      auto time_since_noninc = (clock_->now() - prev_noninc_msg_ts_).seconds();
-      if (time_since_noninc < greenwave_diagnostics::constants::kDropWarnTimeoutSeconds) {
-        error_found = true;
-        status_vec_[0].level = diagnostic_msgs::msg::DiagnosticStatus::ERROR;
-        deadlines_missed_since_last_pub_ = 0;
-        update_status_message(status_vec_[0], "NONINCREASING TIMESTAMP");
+    // Increasing timestamp check
+    if (source.check_increasing) {
+      if (current_timestamp_us <= source.prev_timestamp_us) {
+        source.num_non_increasing++;
+        source.prev_noninc_ts = clock_->now();
+        RCLCPP_WARN(node_.get_logger(),
+          "[GreenwaveDiagnostics %s Increasing] current(%" PRIu64
+          ") <= previous(%" PRIu64 ") topic %s. Units: microseconds.",
+          source.label.c_str(), current_timestamp_us,
+          source.prev_timestamp_us, topic_name_.c_str());
+      }
+      if (source.prev_noninc_ts.nanoseconds() != 0) {
+        if ((clock_->now() - source.prev_noninc_ts).seconds() <
+          constants::kDropWarnTimeoutSeconds)
+        {
+          error_found = true;
+          status_vec_[0].level = diagnostic_msgs::msg::DiagnosticStatus::ERROR;
+          update_status_message(status_vec_[0], source.increasing_error_message);
+        }
       }
     }
+
+    source.prev_timestamp_us = current_timestamp_us;
     return error_found;
   }
 
