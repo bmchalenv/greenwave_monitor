@@ -412,26 +412,11 @@ private:
     }
   }
 
-  bool checkTimeSource(
-    TimeSourceState & source,
-    bool enabled,
-    uint64_t current_timestamp_us)
+  bool checkFPS(TimeSourceState & source, int64_t timestamp_diff_us)
   {
-    bool error_found = false;
-    if (source.prev_timestamp_us == std::numeric_limits<uint64_t>::min()) {
-      source.prev_timestamp_us = current_timestamp_us;
+    if (!source.check_fps || diagnostics_config_.expected_dt_us <= 0) {
       return false;
     }
-    const int64_t timestamp_diff_us =
-      static_cast<int64_t>(current_timestamp_us - source.prev_timestamp_us);
-    source.window.addInterarrival(timestamp_diff_us);
-
-    if (!enabled || !source.check_fps || diagnostics_config_.expected_dt_us <= 0) {
-      source.prev_timestamp_us = current_timestamp_us;
-      return false;
-    }
-
-    // FPS / jitter check
     const int64_t diff_us = timestamp_diff_us - diagnostics_config_.expected_dt_us;
     const int64_t abs_jitter_us = std::abs(diff_us);
     const bool missed_deadline =
@@ -444,38 +429,61 @@ private:
         source.label.c_str(), timestamp_diff_us, diagnostics_config_.expected_dt_us,
         diagnostics_config_.jitter_tolerance_us, abs_jitter_us, topic_name_.c_str());
     }
-    if (source.prev_drop_ts.nanoseconds() != 0) {
-      if ((clock_->now() - source.prev_drop_ts).seconds() <
-        constants::kDropWarnTimeoutSeconds)
-      {
-        error_found = true;
-        status_vec_[0].level = diagnostic_msgs::msg::DiagnosticStatus::ERROR;
-        update_status_message(status_vec_[0], source.drop_error_message);
-      }
+    if (source.prev_drop_ts.nanoseconds() != 0 &&
+      (clock_->now() - source.prev_drop_ts).seconds() < constants::kDropWarnTimeoutSeconds)
+    {
+      status_vec_[0].level = diagnostic_msgs::msg::DiagnosticStatus::ERROR;
+      update_status_message(status_vec_[0], source.drop_error_message);
+      return true;
+    }
+    return false;
+  }
+
+  bool checkIncreasing(TimeSourceState & source, uint64_t current_timestamp_us)
+  {
+    if (!source.check_increasing) {
+      return false;
+    }
+    if (current_timestamp_us <= source.prev_timestamp_us) {
+      source.num_non_increasing++;
+      source.prev_noninc_ts = clock_->now();
+      RCLCPP_WARN(node_.get_logger(),
+        "[GreenwaveDiagnostics %s Increasing] current(%" PRIu64
+        ") <= previous(%" PRIu64 ") topic %s. Units: microseconds.",
+        source.label.c_str(), current_timestamp_us,
+        source.prev_timestamp_us, topic_name_.c_str());
+    }
+    if (source.prev_noninc_ts.nanoseconds() != 0 &&
+      (clock_->now() - source.prev_noninc_ts).seconds() < constants::kDropWarnTimeoutSeconds)
+    {
+      status_vec_[0].level = diagnostic_msgs::msg::DiagnosticStatus::ERROR;
+      update_status_message(status_vec_[0], source.increasing_error_message);
+      return true;
+    }
+    return false;
+  }
+
+  bool checkTimeSource(
+    TimeSourceState & source,
+    bool enabled,
+    uint64_t current_timestamp_us)
+  {
+    if (source.prev_timestamp_us == std::numeric_limits<uint64_t>::min()) {
+      source.prev_timestamp_us = current_timestamp_us;
+      return false;
+    }
+    const int64_t timestamp_diff_us =
+      static_cast<int64_t>(current_timestamp_us - source.prev_timestamp_us);
+    source.window.addInterarrival(timestamp_diff_us);
+
+    if (!enabled) {
+      source.prev_timestamp_us = current_timestamp_us;
+      return false;
     }
 
-    // Increasing timestamp check
-    if (source.check_increasing) {
-      if (current_timestamp_us <= source.prev_timestamp_us) {
-        source.num_non_increasing++;
-        source.prev_noninc_ts = clock_->now();
-        RCLCPP_WARN(node_.get_logger(),
-          "[GreenwaveDiagnostics %s Increasing] current(%" PRIu64
-          ") <= previous(%" PRIu64 ") topic %s. Units: microseconds.",
-          source.label.c_str(), current_timestamp_us,
-          source.prev_timestamp_us, topic_name_.c_str());
-      }
-      if (source.prev_noninc_ts.nanoseconds() != 0) {
-        if ((clock_->now() - source.prev_noninc_ts).seconds() <
-          constants::kDropWarnTimeoutSeconds)
-        {
-          error_found = true;
-          status_vec_[0].level = diagnostic_msgs::msg::DiagnosticStatus::ERROR;
-          update_status_message(status_vec_[0], source.increasing_error_message);
-        }
-      }
-    }
-
+    bool error_found = false;
+    error_found |= checkFPS(source, timestamp_diff_us);
+    error_found |= checkIncreasing(source, current_timestamp_us);
     source.prev_timestamp_us = current_timestamp_us;
     return error_found;
   }
