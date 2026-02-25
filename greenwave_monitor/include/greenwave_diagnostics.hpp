@@ -87,15 +87,22 @@ public:
 
     node_source_.label = "Node Time";
     node_source_.check_fps = diagnostics_config_.enable_node_time_diagnostics;
+    node_source_.check_fps_window = diagnostics_config_.enable_node_time_diagnostics;
+    node_source_.check_increasing = diagnostics_config_.enable_increasing_node_time_diagnostics;
     node_source_.window.window_size = diagnostics_config_.filter_window_size;
     node_source_.prev_drop_ts = rclcpp::Time(0, 0, clock_->get_clock_type());
+    node_source_.prev_fps_out_of_range_ts = rclcpp::Time(0, 0, clock_->get_clock_type());
+    node_source_.fps_window_error_message = "FPS OUT OF RANGE (NODE TIME)";
 
     msg_source_.label = "Message Timestamp";
     msg_source_.check_fps = diagnostics_config_.enable_msg_time_diagnostics;
+    msg_source_.check_fps_window = diagnostics_config_.enable_msg_time_diagnostics;
     msg_source_.check_increasing = diagnostics_config_.enable_increasing_msg_time_diagnostics;
     msg_source_.window.window_size = diagnostics_config_.filter_window_size;
     msg_source_.prev_drop_ts = rclcpp::Time(0, 0, clock_->get_clock_type());
     msg_source_.prev_noninc_ts = rclcpp::Time(0, 0, clock_->get_clock_type());
+    msg_source_.prev_fps_out_of_range_ts = rclcpp::Time(0, 0, clock_->get_clock_type());
+    msg_source_.fps_window_error_message = "FPS OUT OF RANGE (MESSAGE TIME)";
 
     diagnostic_msgs::msg::DiagnosticStatus topic_status;
     topic_status.name = topic_name;
@@ -267,7 +274,9 @@ public:
     diagnostics_config_.enable_node_time_diagnostics = true;
     diagnostics_config_.enable_msg_time_diagnostics = true;
     node_source_.check_fps = true;
+    node_source_.check_fps_window = true;
     msg_source_.check_fps = true;
+    msg_source_.check_fps_window = true;
 
     // This prevents accidental 0 division in the calculations in case of
     // a direct function call (not from service in greenwave_monitor.cpp)
@@ -300,7 +309,9 @@ public:
     diagnostics_config_.enable_node_time_diagnostics = false;
     diagnostics_config_.enable_msg_time_diagnostics = false;
     node_source_.check_fps = false;
+    node_source_.check_fps_window = false;
     msg_source_.check_fps = false;
+    msg_source_.check_fps_window = false;
 
     diagnostics_config_.expected_dt_us = 0;
     diagnostics_config_.jitter_tolerance_us = 0;
@@ -371,17 +382,20 @@ private:
     // Per-source identity and behavior (set at construction)
     std::string label;
     bool check_fps{false};
+    bool check_fps_window{false};
     bool check_increasing{false};
     std::string drop_error_message{"FRAME DROP DETECTED"};
     std::string increasing_error_message{"NONINCREASING TIMESTAMP"};
+    std::string fps_window_error_message{"FPS OUT OF RANGE"};
 
     // Rolling statistics
     RollingWindow window;
 
     // Tracking state
     uint64_t prev_timestamp_us{std::numeric_limits<uint64_t>::min()};
-    rclcpp::Time prev_drop_ts;    // last deadline miss
-    rclcpp::Time prev_noninc_ts;  // last increasing timestamp violation
+    rclcpp::Time prev_drop_ts;           // last deadline miss
+    rclcpp::Time prev_noninc_ts;         // last increasing timestamp violation
+    rclcpp::Time prev_fps_out_of_range_ts;  // last FPS window (min/max) violation
     uint64_t num_non_increasing{0};
   };
 
@@ -463,6 +477,48 @@ private:
     return false;
   }
 
+  bool checkFpsWindow(TimeSourceState & source)
+  {
+    if (!source.check_fps_window || expected_frequency_ <= 0.0 ||
+      source.window.interarrival_us.empty())
+    {
+      return false;
+    }
+    const double clamped_tolerance_percent = std::max(0.0, tolerance_);
+    const double tolerance_ratio = clamped_tolerance_percent / 100.0;
+    const double min_allowed_fps =
+      expected_frequency_ * std::max(0.0, 1.0 - tolerance_ratio);
+    const double max_allowed_fps = expected_frequency_ * (1.0 + tolerance_ratio);
+    const double current_fps = source.window.frameRateHz();
+
+    if (current_fps < min_allowed_fps) {
+      source.prev_fps_out_of_range_ts = clock_->now();
+      RCLCPP_DEBUG(
+        node_.get_logger(),
+        "[GreenwaveDiagnostics %s FPS] Current FPS (%.3f) is below minimum allowed (%.3f)"
+        " for topic %s.",
+        source.label.c_str(), current_fps, min_allowed_fps, topic_name_.c_str());
+    }
+    if (current_fps > max_allowed_fps) {
+      source.prev_fps_out_of_range_ts = clock_->now();
+      RCLCPP_DEBUG(
+        node_.get_logger(),
+        "[GreenwaveDiagnostics %s FPS] Current FPS (%.3f) is above maximum allowed (%.3f)"
+        " for topic %s.",
+        source.label.c_str(), current_fps, max_allowed_fps, topic_name_.c_str());
+    }
+
+    if (source.prev_fps_out_of_range_ts.nanoseconds() != 0 &&
+      (clock_->now() - source.prev_fps_out_of_range_ts).seconds() <
+      constants::kDropWarnTimeoutSeconds)
+    {
+      status_vec_[0].level = diagnostic_msgs::msg::DiagnosticStatus::ERROR;
+      update_status_message(status_vec_[0], source.fps_window_error_message);
+      return true;
+    }
+    return false;
+  }
+
   bool checkTimeSource(
     TimeSourceState & source,
     bool enabled,
@@ -483,6 +539,7 @@ private:
 
     bool error_found = false;
     error_found |= checkFPS(source, timestamp_diff_us);
+    error_found |= checkFpsWindow(source);
     error_found |= checkIncreasing(source, current_timestamp_us);
     source.prev_timestamp_us = current_timestamp_us;
     return error_found;
