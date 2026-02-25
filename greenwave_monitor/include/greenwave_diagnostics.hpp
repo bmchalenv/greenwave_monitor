@@ -48,6 +48,46 @@ inline constexpr int64_t kDropWarnTimeoutSeconds = 5LL;
 inline constexpr int64_t kNonsenseLatencyMs = 365LL * 24LL * 60LL * 60LL * 1000LL;
 }  // namespace constants
 
+// Preset for which time sources to check (header with node time fallback, header only, node time only, none)
+enum class TimeCheckPreset
+{
+  HeaderWithFallback,
+  HeaderOnly,
+  NodetimeOnly,
+  None
+};
+
+inline constexpr const char * kTimestampModeHeaderWithFallback = "header_with_nodetime_fallback";
+inline constexpr const char * kTimestampModeHeaderOnly = "header_only";
+inline constexpr const char * kTimestampModeNodetimeOnly = "nodetime_only";
+inline constexpr const char * kTimestampModeNone = "none";
+
+inline constexpr const char * kTimeCheckPresetsParam = "time_check_preset";
+
+inline std::vector<std::string> timeCheckPresetOptions()
+{
+  return {
+    kTimestampModeNone,
+    kTimestampModeHeaderWithFallback,
+    kTimestampModeHeaderOnly,
+    kTimestampModeNodetimeOnly,
+  };
+}
+
+inline TimeCheckPreset timeCheckPresetFromString(const std::string & s)
+{
+  if (s == kTimestampModeHeaderOnly) {
+    return TimeCheckPreset::HeaderOnly;
+  }
+  if (s == kTimestampModeNodetimeOnly) {
+    return TimeCheckPreset::NodetimeOnly;
+  }
+  if (s == kTimestampModeHeaderWithFallback) {
+    return TimeCheckPreset::HeaderWithFallback;
+  }
+  return TimeCheckPreset::None;
+}
+
 // Configurations for a greenwave diagnostics
 struct GreenwaveDiagnosticsConfig
 {
@@ -58,8 +98,11 @@ struct GreenwaveDiagnosticsConfig
   bool enable_all_diagnostics{false};
   bool enable_node_time_diagnostics{false};
   bool enable_msg_time_diagnostics{false};
+  bool enable_fps_window_msg_time_diagnostics{false};
+  bool enable_fps_window_node_time_diagnostics{false};
   bool enable_increasing_msg_time_diagnostics{false};
   bool enable_increasing_node_time_diagnostics{false};
+  bool fallback_to_nodetime{false};
 
   // enable basic diagnostics for all topics, triggered by an environment variable
   bool enable_all_topic_diagnostics{false};
@@ -72,6 +115,9 @@ struct GreenwaveDiagnosticsConfig
 
   // Tolerance for jitter from expected frame rate in microseconds
   int64_t jitter_tolerance_us{0LL};
+
+  // Which time sources to check (from ROS parameter time_check_presets)
+  TimeCheckPreset time_check_preset{TimeCheckPreset::HeaderWithFallback};
 };
 
 class GreenwaveDiagnostics
@@ -85,6 +131,13 @@ public:
   {
     clock_ = node_.get_clock();
 
+    if (!node_.has_parameter(kTimeCheckPresetsParam)) {
+      node_.declare_parameter<std::string>(
+        kTimeCheckPresetsParam, kTimestampModeHeaderWithFallback);
+    }
+    diagnostics_config_.time_check_preset = timeCheckPresetFromString(
+      node_.get_parameter(kTimeCheckPresetsParam).as_string());
+
     node_source_.label = "Node Time";
     node_source_.check_fps = diagnostics_config_.enable_node_time_diagnostics;
     node_source_.check_fps_window = diagnostics_config_.enable_node_time_diagnostics;
@@ -94,7 +147,7 @@ public:
     node_source_.prev_fps_out_of_range_ts = rclcpp::Time(0, 0, clock_->get_clock_type());
     node_source_.fps_window_error_message = "FPS OUT OF RANGE (NODE TIME)";
 
-    msg_source_.label = "Message Timestamp";
+    msg_source_.label = "Message Time";
     msg_source_.check_fps = diagnostics_config_.enable_msg_time_diagnostics;
     msg_source_.check_fps_window = diagnostics_config_.enable_msg_time_diagnostics;
     msg_source_.check_increasing = diagnostics_config_.enable_increasing_msg_time_diagnostics;
@@ -103,6 +156,36 @@ public:
     msg_source_.prev_noninc_ts = rclcpp::Time(0, 0, clock_->get_clock_type());
     msg_source_.prev_fps_out_of_range_ts = rclcpp::Time(0, 0, clock_->get_clock_type());
     msg_source_.fps_window_error_message = "FPS OUT OF RANGE (MESSAGE TIME)";
+
+    switch (diagnostics_config_.time_check_preset) {
+      case TimeCheckPreset::HeaderOnly:
+        msg_source_.check_fps = true;
+        msg_source_.check_fps_window = true;
+        msg_source_.check_increasing = true;
+        node_source_.check_fps = false;
+        node_source_.check_fps_window = false;
+        node_source_.check_increasing = false;
+        break;
+      case TimeCheckPreset::NodetimeOnly:
+        node_source_.check_fps = true;
+        node_source_.check_fps_window = true;
+        node_source_.check_increasing = true;
+        msg_source_.check_fps = false;
+        msg_source_.check_fps_window = false;
+        msg_source_.check_increasing = false;
+        break;
+      case TimeCheckPreset::HeaderWithFallback:
+        msg_source_.check_fps = true;
+        msg_source_.check_fps_window = true;
+        msg_source_.check_increasing = true;
+        node_source_.check_fps = true;
+        node_source_.check_fps_window = true;
+        node_source_.check_increasing = true;
+        diagnostics_config_.fallback_to_nodetime = true;
+        break;
+      case TimeCheckPreset::None:
+        break;
+    }
 
     diagnostic_msgs::msg::DiagnosticStatus topic_status;
     topic_status.name = topic_name;
@@ -428,7 +511,7 @@ private:
 
   bool checkFPS(TimeSourceState & source, int64_t timestamp_diff_us)
   {
-    if (!source.check_fps || diagnostics_config_.expected_dt_us <= 0) {
+    if (diagnostics_config_.expected_dt_us <= 0) {
       return false;
     }
     const int64_t diff_us = timestamp_diff_us - diagnostics_config_.expected_dt_us;
@@ -538,9 +621,15 @@ private:
     }
 
     bool error_found = false;
-    error_found |= checkFPS(source, timestamp_diff_us);
-    error_found |= checkFpsWindow(source);
-    error_found |= checkIncreasing(source, current_timestamp_us);
+    if (source.check_fps) {
+      error_found |= checkFPS(source, timestamp_diff_us);
+    }
+    if (source.check_fps_window) {
+      error_found |= checkFpsWindow(source);
+    }
+    if (source.check_increasing) {
+      error_found |= checkIncreasing(source, current_timestamp_us);
+    }
     source.prev_timestamp_us = current_timestamp_us;
     return error_found;
   }
