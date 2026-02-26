@@ -494,7 +494,8 @@ private:
     }
     if (missed_deadline) {
       source.prev_drop_ts = clock_->now();
-      RCLCPP_DEBUG(node_.get_logger(),
+      RCLCPP_DEBUG(
+        node_.get_logger(),
         "[GreenwaveDiagnostics %s] dt(%" PRId64 ") expected(%" PRId64
         ") tolerance(%" PRId64 ") excess(%" PRId64 ") topic %s. Units: microseconds.",
         source.label.c_str(), timestamp_diff_us, diagnostics_config_.expected_dt_us,
@@ -518,7 +519,8 @@ private:
     if (current_timestamp_us <= source.prev_timestamp_us) {
       source.num_non_increasing++;
       source.prev_noninc_ts = clock_->now();
-      RCLCPP_WARN(node_.get_logger(),
+      RCLCPP_WARN(
+        node_.get_logger(),
         "[GreenwaveDiagnostics %s Increasing] current(%" PRIu64
         ") <= previous(%" PRIu64 ") topic %s. Units: microseconds.",
         source.label.c_str(), current_timestamp_us,
