@@ -109,6 +109,11 @@ if(BUILD_TESTING)
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   )
 
+  ament_add_pytest_test(test_greenwave_monitor_preset test/test_greenwave_monitor_preset.py
+    TIMEOUT 180
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  )
+
   # Add explicit linting tests
   ament_add_pytest_test(test_flake8 test/test_flake8.py
     TIMEOUT 60

@@ -36,12 +36,14 @@ In particular, the messages follow conventions from [Isaac ROS NITROS](https://g
 We provide a single node which can subscribe to arbitrary topics and produce greenwave diagnostics for them. You can think of this like a more efficient, more featureful version of ros2 topic hz. Implementation: `greenwave_monitor/src/greenwave_monitor.cpp`
 
 - Starts a generic subscription per monitored topic.
-- Reads topic list from:
+- Reads topic list and parameters from:
   - `gw_monitored_topics`
+  - `gw_time_check_preset` (see [Time check presets](#time-check-presets))
   - `gw_frequency_monitored_topics.<topic>.expected_frequency`
   - `gw_frequency_monitored_topics.<topic>.tolerance`
 - Resolves topic type dynamically and uses serialized subscriptions.
-- Extracts message timestamps for known header-bearing types.
+- Extracts message timestamps for known header-bearing types (see `has_header_from_type()`).
+- For topics without a header, uses node receive time; the time check preset controls which checks run.
 - Publishes diagnostics once per second in `timer_callback()`.
 
 Provides runtime services:
@@ -120,6 +122,37 @@ Dashboards expect specific keys inside `DiagnosticStatus.values`, including:
 - `tolerance`
 
 These are already emitted by `GreenwaveDiagnostics::publishDiagnostics()`. You can write your own publisher for greenwave compatible `/diagnostics`, but we don't guarantee schema stability for now.
+
+## Timestamp sources
+
+Greenwave diagnostics tracks two timestamp series for each monitored topic:
+
+- **Header timestamp** — the `stamp` field embedded in the message's `std_msgs/Header`. For sensor data this is typically set at acquisition time (e.g. when a camera frame is captured), making it more accurate than node receive time for characterizing true source frequency and jitter.
+- **Node receive time** — the wall-clock time when the ROS message callback fires, reflecting when the subscriber received the message including any network or queuing delays.
+
+Latency (`current_delay_from_realtime_ms`) is measured as the difference between the node receive time and the header timestamp. A large value indicates significant pipeline delay between capture and consumption.
+
+## Time check presets
+
+The `gw_time_check_preset` node parameter controls which time-based checks run on each monitored topic. This is especially important for **headerless topics** (e.g. `std_msgs/String`), where message timestamps are not available and the monitor can optionally use node receive time instead.
+
+| Preset value | Description |
+|--------------|-------------|
+| `header_with_nodetime_fallback` (default) | For header-bearing types: check message timestamp (rate, jitter, increasing). For headerless types: fall back to node time and run FPS window and increasing-timestamp checks. |
+| `header_only` | Check message timestamp only. Headerless topics get no timing checks (diagnostics stay OK). Use when you only care about headered sources. |
+| `nodetime_only` | Use node receive time for all topics (header and headerless). Runs FPS window and increasing-timestamp checks. |
+| `none` | No time-based checks; only raw rate/latency values are computed and published. |
+
+Configure via YAML or launch:
+
+```yaml
+greenwave_monitor:
+  ros__parameters:
+    gw_time_check_preset: header_with_nodetime_fallback  # or header_only, nodetime_only, none
+    gw_monitored_topics: ['/my_topic']
+```
+
+Invalid values are ignored and the default `header_with_nodetime_fallback` is used (a warning is logged).
 
 ## Implementation Notes And Pitfalls
 

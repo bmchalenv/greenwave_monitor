@@ -27,6 +27,31 @@
 
 using namespace std::chrono_literals;
 
+namespace
+{
+
+constexpr const char * kTimestampModeHeaderWithFallback = "header_with_nodetime_fallback";
+constexpr const char * kTimestampModeHeaderOnly = "header_only";
+constexpr const char * kTimestampModeNodetimeOnly = "nodetime_only";
+constexpr const char * kTimestampModeNone = "none";
+constexpr const char * kTimeCheckPresetsParam = "gw_time_check_preset";
+
+greenwave_diagnostics::TimeCheckPreset timeCheckPresetFromString(const std::string & s)
+{
+  if (s == kTimestampModeHeaderOnly) {
+    return greenwave_diagnostics::TimeCheckPreset::HeaderOnly;
+  }
+  if (s == kTimestampModeNodetimeOnly) {
+    return greenwave_diagnostics::TimeCheckPreset::NodetimeOnly;
+  }
+  if (s == kTimestampModeHeaderWithFallback) {
+    return greenwave_diagnostics::TimeCheckPreset::HeaderWithFallback;
+  }
+  return greenwave_diagnostics::TimeCheckPreset::None;
+}
+
+}  // namespace
+
 namespace greenwave_monitor
 {
 namespace constants
@@ -47,6 +72,28 @@ GreenwaveMonitor::GreenwaveMonitor(const rclcpp::NodeOptions & options)
 
   if (!this->has_parameter("gw_monitored_topics")) {
     this->declare_parameter<std::vector<std::string>>("gw_monitored_topics", {""});
+  }
+  if (!this->has_parameter(kTimeCheckPresetsParam)) {
+    this->declare_parameter<std::string>(
+      kTimeCheckPresetsParam, kTimestampModeHeaderWithFallback);
+  }
+  std::string time_check_preset_str = this->get_parameter(kTimeCheckPresetsParam).as_string();
+  time_check_preset_ = timeCheckPresetFromString(time_check_preset_str);
+  // Give a warning if the time check preset has an invalid string and use the default
+  if (time_check_preset_ == greenwave_diagnostics::TimeCheckPreset::None &&
+    time_check_preset_str != kTimestampModeNone)
+  {
+    RCLCPP_WARN(
+      this->get_logger(), "Invalid time check preset '%s', using default '%s'. Valid presets are: "
+      "%s, %s, %s, %s",
+      time_check_preset_str.c_str(), kTimestampModeHeaderWithFallback,
+      kTimestampModeHeaderWithFallback, kTimestampModeHeaderOnly, kTimestampModeNodetimeOnly,
+      kTimestampModeNone);
+    time_check_preset_ = greenwave_diagnostics::TimeCheckPreset::HeaderWithFallback;
+  } else if (time_check_preset_ != greenwave_diagnostics::TimeCheckPreset::None) {
+    RCLCPP_INFO(
+      this->get_logger(), "Using time check preset '%s'",
+      time_check_preset_str.c_str());
   }
 
   timer_ = this->create_wall_timer(
@@ -299,6 +346,8 @@ bool GreenwaveMonitor::add_topic(
 
   greenwave_diagnostics::GreenwaveDiagnosticsConfig diagnostics_config;
   diagnostics_config.enable_all_topic_diagnostics = true;
+  diagnostics_config.time_check_preset = time_check_preset_;
+  diagnostics_config.has_msg_timestamp = has_header_from_type(type);
 
   subscriptions_.push_back(sub);
   greenwave_diagnostics_.emplace(
