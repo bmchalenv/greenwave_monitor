@@ -72,7 +72,7 @@ struct GreenwaveDiagnosticsConfig
   bool enable_increasing_msg_time_diagnostics{false};
   bool enable_increasing_node_time_diagnostics{false};
 
-  // flag indicating if the diagnostics should fallback to using node time if the message time is not available
+  // fallback to node time when message time is not available
   bool fallback_to_nodetime{false};
 
   // flag indicating if it's expected for the message to have a timestamp
@@ -180,9 +180,6 @@ public:
     status_vec_.push_back(topic_status);
 
     t_start_ = clock_->now();
-
-    message_latency_msg_ms_ = 0;
-    outdated_msg_ = true;
 
     diagnostic_publisher_ =
       node_.create_publisher<diagnostic_msgs::msg::DiagnosticArray>(
@@ -471,7 +468,7 @@ private:
   TimeSourceState msg_source_;
 
   double message_latency_msg_ms_{std::numeric_limits<double>::quiet_NaN()};
-  bool outdated_msg_;
+  bool outdated_msg_{true};
   rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr diagnostic_publisher_;
 
   void update_status_message(diagnostic_msgs::msg::DiagnosticStatus & status, std::string update)
@@ -492,6 +489,9 @@ private:
     const int64_t abs_jitter_us = std::abs(diff_us);
     const bool missed_deadline =
       source.window.addJitter(abs_jitter_us, diagnostics_config_.jitter_tolerance_us);
+    if (!source.check_fps_jitter) {
+      return false;
+    }
     if (missed_deadline) {
       source.prev_drop_ts = clock_->now();
       RCLCPP_DEBUG(node_.get_logger(),
@@ -537,7 +537,7 @@ private:
   bool checkFpsWindow(TimeSourceState & source)
   {
     if (expected_frequency_ <= 0.0 ||
-      source.window.interarrival_us.empty())
+      source.window.interarrival_us.empty() || !source.check_fps_window)
     {
       return false;
     }
@@ -594,15 +594,9 @@ private:
     }
 
     bool error_found = false;
-    if (source.check_fps_jitter) {
-      error_found |= checkFpsJitter(source, timestamp_diff_us);
-    }
-    if (source.check_fps_window) {
-      error_found |= checkFpsWindow(source);
-    }
-    if (source.check_increasing) {
-      error_found |= checkIncreasing(source, current_timestamp_us);
-    }
+    error_found |= checkFpsJitter(source, timestamp_diff_us);
+    error_found |= checkFpsWindow(source);
+    error_found |= checkIncreasing(source, current_timestamp_us);
     source.prev_timestamp_us = current_timestamp_us;
     return error_found;
   }

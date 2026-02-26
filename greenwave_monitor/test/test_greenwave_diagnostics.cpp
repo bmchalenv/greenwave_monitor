@@ -64,9 +64,10 @@ protected:
 
 TEST_F(GreenwaveDiagnosticsTest, FrameRateMsgTest)
 {
-  // Initialize GreenwaveDiagnostics
+  greenwave_diagnostics::GreenwaveDiagnosticsConfig config;
+  config.has_msg_timestamp = true;
   greenwave_diagnostics::GreenwaveDiagnostics greenwave_diagnostics(
-    *node_, "test_topic", greenwave_diagnostics::GreenwaveDiagnosticsConfig());
+    *node_, "test_topic", config);
 
   uint64_t timestamp = test_constants::kStartTimestampNs;  // in nanoseconds
   for (int i = 0; i < 1000; i++) {
@@ -105,9 +106,11 @@ TEST_F(GreenwaveDiagnosticsTest, FrameRateNodeTest)
 
 TEST_F(GreenwaveDiagnosticsTest, MessageLatencyTest)
 {
-  // Initialize GreenwaveDiagnostics
+  greenwave_diagnostics::GreenwaveDiagnosticsConfig config;
+  config.time_check_preset = greenwave_diagnostics::TimeCheckPreset::HeaderOnly;
+  config.has_msg_timestamp = true;
   greenwave_diagnostics::GreenwaveDiagnostics greenwave_diagnostics(
-    *node_, "test_topic", greenwave_diagnostics::GreenwaveDiagnosticsConfig());
+    *node_, "test_topic", config);
 
   const rclcpp::Time current_time = node_->get_clock()->now();
   // Make message timestamp a certain amount of time earlier than current time
@@ -129,12 +132,12 @@ TEST_F(GreenwaveDiagnosticsTest, DiagnosticPublishSubscribeTest)
   const int64_t interarrival_time_ns = static_cast<int64_t>(
     ::greenwave_diagnostics::constants::kSecondsToNanoseconds / input_frequency);
 
-  // Initialize GreenwaveDiagnostics with diagnostics enabled
   greenwave_diagnostics::GreenwaveDiagnosticsConfig config;
   config.enable_msg_time_diagnostics = true;
   config.enable_node_time_diagnostics = true;
+  config.enable_fps_jitter_msg_time_diagnostics = true;
   config.enable_increasing_msg_time_diagnostics = true;
-  // in us
+  config.has_msg_timestamp = true;
   config.expected_dt_us = interarrival_time_ns /
     ::greenwave_diagnostics::constants::kMicrosecondsToNanoseconds;
 
