@@ -97,4 +97,5 @@ private:
     manage_topic_service_;
   rclcpp::Service<greenwave_monitor_interfaces::srv::SetExpectedFrequency>::SharedPtr
     set_expected_frequency_service_;
+  greenwave_diagnostics::TimeCheckPreset time_check_preset_;
 };
