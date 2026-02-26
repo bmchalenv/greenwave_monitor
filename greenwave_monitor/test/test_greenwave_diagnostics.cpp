@@ -372,7 +372,7 @@ TEST_F(GreenwaveDiagnosticsTest, TimeCheckPresetNone)
 {
   greenwave_diagnostics::GreenwaveDiagnosticsConfig config;
   config.time_check_preset = greenwave_diagnostics::TimeCheckPreset::None;
-  greenwave_diagnostics::applyTimeCheckPreset(config);
+  config.applyTimeCheckPreset();
   EXPECT_FALSE(config.enable_node_time_diagnostics);
   EXPECT_FALSE(config.enable_msg_time_diagnostics);
   EXPECT_FALSE(config.enable_fps_jitter_msg_time_diagnostics);
@@ -388,7 +388,7 @@ TEST_F(GreenwaveDiagnosticsTest, TimeCheckPresetHeaderOnly)
 {
   greenwave_diagnostics::GreenwaveDiagnosticsConfig config;
   config.time_check_preset = greenwave_diagnostics::TimeCheckPreset::HeaderOnly;
-  greenwave_diagnostics::applyTimeCheckPreset(config);
+  config.applyTimeCheckPreset();
   EXPECT_FALSE(config.enable_node_time_diagnostics);
   EXPECT_TRUE(config.enable_msg_time_diagnostics);
   EXPECT_TRUE(config.enable_fps_jitter_msg_time_diagnostics);
@@ -404,7 +404,7 @@ TEST_F(GreenwaveDiagnosticsTest, TimeCheckPresetNodetimeOnly)
 {
   greenwave_diagnostics::GreenwaveDiagnosticsConfig config;
   config.time_check_preset = greenwave_diagnostics::TimeCheckPreset::NodetimeOnly;
-  greenwave_diagnostics::applyTimeCheckPreset(config);
+  config.applyTimeCheckPreset();
   EXPECT_TRUE(config.enable_node_time_diagnostics);
   EXPECT_FALSE(config.enable_msg_time_diagnostics);
   EXPECT_FALSE(config.enable_fps_jitter_msg_time_diagnostics);
@@ -421,7 +421,7 @@ TEST_F(GreenwaveDiagnosticsTest, TimeCheckPresetHeaderWithFallbackNoMsgTimestamp
   greenwave_diagnostics::GreenwaveDiagnosticsConfig config;
   config.time_check_preset = greenwave_diagnostics::TimeCheckPreset::HeaderWithFallback;
   config.has_msg_timestamp = false;
-  greenwave_diagnostics::applyTimeCheckPreset(config);
+  config.applyTimeCheckPreset();
   EXPECT_TRUE(config.fallback_to_nodetime);
   EXPECT_TRUE(config.enable_node_time_diagnostics);
   EXPECT_FALSE(config.enable_fps_jitter_node_time_diagnostics);
@@ -438,7 +438,7 @@ TEST_F(GreenwaveDiagnosticsTest, TimeCheckPresetHeaderWithFallbackWithMsgTimesta
   greenwave_diagnostics::GreenwaveDiagnosticsConfig config;
   config.time_check_preset = greenwave_diagnostics::TimeCheckPreset::HeaderWithFallback;
   config.has_msg_timestamp = true;
-  greenwave_diagnostics::applyTimeCheckPreset(config);
+  config.applyTimeCheckPreset();
   EXPECT_TRUE(config.fallback_to_nodetime);
   EXPECT_TRUE(config.enable_node_time_diagnostics);
   EXPECT_FALSE(config.enable_fps_jitter_node_time_diagnostics);

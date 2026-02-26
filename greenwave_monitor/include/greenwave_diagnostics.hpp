@@ -89,50 +89,49 @@ struct GreenwaveDiagnosticsConfig
 
   // Tolerance for jitter from expected frame rate in microseconds
   int64_t jitter_tolerance_us{0LL};
-};
 
-inline void applyTimeCheckPreset(
-  GreenwaveDiagnosticsConfig & config)
-{
-  switch (config.time_check_preset) {
-    case TimeCheckPreset::None:
-      break;
-    case TimeCheckPreset::HeaderOnly:
-      config.enable_node_time_diagnostics = false;
-      config.enable_fps_jitter_node_time_diagnostics = false;
-      config.enable_fps_window_node_time_diagnostics = false;
-      config.enable_increasing_node_time_diagnostics = false;
-      config.enable_msg_time_diagnostics = true;
-      config.enable_fps_jitter_msg_time_diagnostics = true;
-      config.enable_fps_window_msg_time_diagnostics = false;
-      config.enable_increasing_msg_time_diagnostics = true;
-      break;
-    case TimeCheckPreset::NodetimeOnly:
-      config.enable_node_time_diagnostics = true;
-      config.enable_fps_jitter_node_time_diagnostics = false;
-      config.enable_fps_window_node_time_diagnostics = true;
-      config.enable_increasing_node_time_diagnostics = true;
-      config.enable_msg_time_diagnostics = false;
-      config.enable_fps_jitter_msg_time_diagnostics = false;
-      config.enable_fps_window_msg_time_diagnostics = false;
-      config.enable_increasing_msg_time_diagnostics = false;
-      break;
-    case TimeCheckPreset::HeaderWithFallback:
-      // Enable msg time diagnostics only when it is known there is a msg timestamp, otherwise
-      // disable them and use node time only. fps jitter checks for node time are too restrictive,
-      // disable them.
-      config.fallback_to_nodetime = true;
-      config.enable_node_time_diagnostics = true;
-      config.enable_fps_jitter_node_time_diagnostics = false;
-      config.enable_fps_window_node_time_diagnostics = !config.has_msg_timestamp;
-      config.enable_increasing_node_time_diagnostics = true;
-      config.enable_msg_time_diagnostics = config.has_msg_timestamp;
-      config.enable_fps_jitter_msg_time_diagnostics = config.has_msg_timestamp;
-      config.enable_fps_window_msg_time_diagnostics = false;
-      config.enable_increasing_msg_time_diagnostics = config.has_msg_timestamp;
-      break;
+  void applyTimeCheckPreset()
+  {
+    switch (time_check_preset) {
+      case TimeCheckPreset::None:
+        break;
+      case TimeCheckPreset::HeaderOnly:
+        enable_node_time_diagnostics = false;
+        enable_fps_jitter_node_time_diagnostics = false;
+        enable_fps_window_node_time_diagnostics = false;
+        enable_increasing_node_time_diagnostics = false;
+        enable_msg_time_diagnostics = true;
+        enable_fps_jitter_msg_time_diagnostics = true;
+        enable_fps_window_msg_time_diagnostics = false;
+        enable_increasing_msg_time_diagnostics = true;
+        break;
+      case TimeCheckPreset::NodetimeOnly:
+        enable_node_time_diagnostics = true;
+        enable_fps_jitter_node_time_diagnostics = false;
+        enable_fps_window_node_time_diagnostics = true;
+        enable_increasing_node_time_diagnostics = true;
+        enable_msg_time_diagnostics = false;
+        enable_fps_jitter_msg_time_diagnostics = false;
+        enable_fps_window_msg_time_diagnostics = false;
+        enable_increasing_msg_time_diagnostics = false;
+        break;
+      case TimeCheckPreset::HeaderWithFallback:
+        // Enable msg time diagnostics only when it is known there is a msg timestamp, otherwise
+        // disable them and use node time only. fps jitter checks for node time are too restrictive,
+        // disable them.
+        fallback_to_nodetime = true;
+        enable_node_time_diagnostics = true;
+        enable_fps_jitter_node_time_diagnostics = false;
+        enable_fps_window_node_time_diagnostics = !has_msg_timestamp;
+        enable_increasing_node_time_diagnostics = true;
+        enable_msg_time_diagnostics = has_msg_timestamp;
+        enable_fps_jitter_msg_time_diagnostics = has_msg_timestamp;
+        enable_fps_window_msg_time_diagnostics = false;
+        enable_increasing_msg_time_diagnostics = has_msg_timestamp;
+        break;
+    }
   }
-}
+};
 
 class GreenwaveDiagnostics
 {
@@ -144,33 +143,33 @@ public:
   : node_(node), topic_name_(topic_name), diagnostics_config_(diagnostics_config)
   {
     clock_ = node_.get_clock();
-    applyTimeCheckPreset(diagnostics_config_);
+    diagnostics_config_.applyTimeCheckPreset();
 
-    node_source_.label = "Node Time";
-    node_source_.enabled = diagnostics_config_.enable_node_time_diagnostics;
-    node_source_.check_fps_jitter = diagnostics_config_.enable_fps_jitter_node_time_diagnostics;
-    node_source_.check_fps_window = diagnostics_config_.enable_fps_window_node_time_diagnostics;
-    node_source_.check_increasing = diagnostics_config_.enable_increasing_node_time_diagnostics;
-    node_source_.window.window_size = diagnostics_config_.filter_window_size;
-    node_source_.prev_drop_ts = rclcpp::Time(0, 0, clock_->get_clock_type());
-    node_source_.prev_noninc_ts = rclcpp::Time(0, 0, clock_->get_clock_type());
-    node_source_.prev_fps_out_of_range_ts = rclcpp::Time(0, 0, clock_->get_clock_type());
-    node_source_.drop_error_message = "FRAME DROP DETECTED (NODE TIME)";
-    node_source_.increasing_error_message = "NONINCREASING TIMESTAMP (NODE TIME)";
-    node_source_.fps_window_error_message = "FPS OUT OF RANGE (NODE TIME)";
+    node_ts_series_.label = "Node Time";
+    node_ts_series_.enabled = diagnostics_config_.enable_node_time_diagnostics;
+    node_ts_series_.check_fps_jitter = diagnostics_config_.enable_fps_jitter_node_time_diagnostics;
+    node_ts_series_.check_fps_window = diagnostics_config_.enable_fps_window_node_time_diagnostics;
+    node_ts_series_.check_increasing = diagnostics_config_.enable_increasing_node_time_diagnostics;
+    node_ts_series_.window.window_size = diagnostics_config_.filter_window_size;
+    node_ts_series_.prev_drop_ts = rclcpp::Time(0, 0, clock_->get_clock_type());
+    node_ts_series_.prev_noninc_ts = rclcpp::Time(0, 0, clock_->get_clock_type());
+    node_ts_series_.prev_fps_out_of_range_ts = rclcpp::Time(0, 0, clock_->get_clock_type());
+    node_ts_series_.drop_error_message = "FRAME DROP DETECTED (NODE TIME)";
+    node_ts_series_.increasing_error_message = "NONINCREASING TIMESTAMP (NODE TIME)";
+    node_ts_series_.fps_window_error_message = "FPS OUT OF RANGE (NODE TIME)";
 
-    msg_source_.label = "Message Time";
-    msg_source_.enabled = diagnostics_config_.enable_msg_time_diagnostics;
-    msg_source_.check_fps_jitter = diagnostics_config_.enable_fps_jitter_msg_time_diagnostics;
-    msg_source_.check_fps_window = diagnostics_config_.enable_fps_window_msg_time_diagnostics;
-    msg_source_.check_increasing = diagnostics_config_.enable_increasing_msg_time_diagnostics;
-    msg_source_.window.window_size = diagnostics_config_.filter_window_size;
-    msg_source_.prev_drop_ts = rclcpp::Time(0, 0, clock_->get_clock_type());
-    msg_source_.prev_noninc_ts = rclcpp::Time(0, 0, clock_->get_clock_type());
-    msg_source_.prev_fps_out_of_range_ts = rclcpp::Time(0, 0, clock_->get_clock_type());
-    msg_source_.drop_error_message = "FRAME DROP DETECTED";
-    msg_source_.increasing_error_message = "NONINCREASING TIMESTAMP";
-    msg_source_.fps_window_error_message = "FPS OUT OF RANGE";
+    msg_ts_series_.label = "Message Time";
+    msg_ts_series_.enabled = diagnostics_config_.enable_msg_time_diagnostics;
+    msg_ts_series_.check_fps_jitter = diagnostics_config_.enable_fps_jitter_msg_time_diagnostics;
+    msg_ts_series_.check_fps_window = diagnostics_config_.enable_fps_window_msg_time_diagnostics;
+    msg_ts_series_.check_increasing = diagnostics_config_.enable_increasing_msg_time_diagnostics;
+    msg_ts_series_.window.window_size = diagnostics_config_.filter_window_size;
+    msg_ts_series_.prev_drop_ts = rclcpp::Time(0, 0, clock_->get_clock_type());
+    msg_ts_series_.prev_noninc_ts = rclcpp::Time(0, 0, clock_->get_clock_type());
+    msg_ts_series_.prev_fps_out_of_range_ts = rclcpp::Time(0, 0, clock_->get_clock_type());
+    msg_ts_series_.drop_error_message = "FRAME DROP DETECTED";
+    msg_ts_series_.increasing_error_message = "NONINCREASING TIMESTAMP";
+    msg_ts_series_.fps_window_error_message = "FPS OUT OF RANGE";
 
     diagnostic_msgs::msg::DiagnosticStatus topic_status;
     topic_status.name = topic_name;
@@ -199,11 +198,11 @@ public:
       clock_->now().nanoseconds() / constants::kMicrosecondsToNanoseconds);
 
     // Node time source
-    error_found |= updateTimeSource(node_source_, current_timestamp_node_us);
+    error_found |= updateTimeSource(node_ts_series_, current_timestamp_node_us);
 
     // Message time source (header-bearing messages only)
     if (diagnostics_config_.has_msg_timestamp) {
-      error_found |= updateTimeSource(msg_source_, current_timestamp_msg_us);
+      error_found |= updateTimeSource(msg_ts_series_, current_timestamp_msg_us);
     }
 
     // Latency (only valid if message time source is available)
@@ -241,35 +240,35 @@ public:
       values.push_back(
         diagnostic_msgs::build<diagnostic_msgs::msg::KeyValue>()
         .key("num_non_increasing_msg")
-        .value(std::to_string(msg_source_.num_non_increasing)));
+        .value(std::to_string(msg_ts_series_.num_non_increasing)));
       values.push_back(
         diagnostic_msgs::build<diagnostic_msgs::msg::KeyValue>()
         .key("num_jitter_outliers_msg")
-        .value(std::to_string(msg_source_.window.outlier_count)));
+        .value(std::to_string(msg_ts_series_.window.outlier_count)));
       values.push_back(
         diagnostic_msgs::build<diagnostic_msgs::msg::KeyValue>()
         .key("num_jitter_outliers_node")
-        .value(std::to_string(node_source_.window.outlier_count)));
+        .value(std::to_string(node_ts_series_.window.outlier_count)));
       values.push_back(
         diagnostic_msgs::build<diagnostic_msgs::msg::KeyValue>()
         .key("max_abs_jitter_msg")
-        .value(std::to_string(msg_source_.window.max_abs_jitter_us)));
+        .value(std::to_string(msg_ts_series_.window.max_abs_jitter_us)));
       values.push_back(
         diagnostic_msgs::build<diagnostic_msgs::msg::KeyValue>()
         .key("max_abs_jitter_node")
-        .value(std::to_string(node_source_.window.max_abs_jitter_us)));
+        .value(std::to_string(node_ts_series_.window.max_abs_jitter_us)));
       values.push_back(
         diagnostic_msgs::build<diagnostic_msgs::msg::KeyValue>()
         .key("mean_abs_jitter_msg")
-        .value(std::to_string(msg_source_.window.meanAbsJitterUs())));
+        .value(std::to_string(msg_ts_series_.window.meanAbsJitterUs())));
       values.push_back(
         diagnostic_msgs::build<diagnostic_msgs::msg::KeyValue>()
         .key("mean_abs_jitter_node")
-        .value(std::to_string(node_source_.window.meanAbsJitterUs())));
+        .value(std::to_string(node_ts_series_.window.meanAbsJitterUs())));
       values.push_back(
         diagnostic_msgs::build<diagnostic_msgs::msg::KeyValue>()
         .key("frame_rate_msg")
-        .value(std::to_string(msg_source_.window.frameRateHz())));
+        .value(std::to_string(msg_ts_series_.window.frameRateHz())));
       values.push_back(
         diagnostic_msgs::build<diagnostic_msgs::msg::KeyValue>()
         .key("current_delay_from_realtime_ms")
@@ -279,11 +278,11 @@ public:
       values.push_back(
         diagnostic_msgs::build<diagnostic_msgs::msg::KeyValue>()
         .key("frame_rate_node")
-        .value(std::to_string(node_source_.window.frameRateHz())));
+        .value(std::to_string(node_ts_series_.window.frameRateHz())));
       values.push_back(
         diagnostic_msgs::build<diagnostic_msgs::msg::KeyValue>()
         .key("total_dropped_frames")
-        .value(std::to_string(msg_source_.window.outlier_count)));
+        .value(std::to_string(msg_ts_series_.window.outlier_count)));
       values.push_back(
         diagnostic_msgs::build<diagnostic_msgs::msg::KeyValue>()
         .key("expected_frequency")
@@ -317,12 +316,12 @@ public:
 
   double getFrameRateNode() const
   {
-    return node_source_.window.frameRateHz();
+    return node_ts_series_.window.frameRateHz();
   }
 
   double getFrameRateMsg() const
   {
-    return msg_source_.window.frameRateHz();
+    return msg_ts_series_.window.frameRateHz();
   }
 
   double getLatency() const
@@ -333,8 +332,8 @@ public:
   void setExpectedDt(double expected_hz, double tolerance_percent)
   {
     const std::lock_guard<std::mutex> lock(greenwave_diagnostics_mutex_);
-    node_source_.enabled = true;
-    msg_source_.enabled = true;
+    node_ts_series_.enabled = true;
+    msg_ts_series_.enabled = true;
     // This prevents accidental 0 division in the calculations in case of
     // a direct function call (not from service in greenwave_monitor.cpp)
     if (expected_hz == 0.0) {
@@ -363,8 +362,8 @@ public:
   void clearExpectedDt()
   {
     const std::lock_guard<std::mutex> lock(greenwave_diagnostics_mutex_);
-    node_source_.enabled = false;
-    msg_source_.enabled = false;
+    node_ts_series_.enabled = false;
+    msg_ts_series_.enabled = false;
 
     diagnostics_config_.expected_dt_us = 0;
     diagnostics_config_.jitter_tolerance_us = 0;
@@ -430,7 +429,7 @@ private:
     }
   };
 
-  struct TimeSourceState
+  struct TimeSeriesState
   {
     // Per-source identity and behavior (set at construction)
     std::string label;
@@ -464,8 +463,8 @@ private:
   rclcpp::Clock::SharedPtr clock_;
   rclcpp::Time t_start_;
 
-  TimeSourceState node_source_;
-  TimeSourceState msg_source_;
+  TimeSeriesState node_ts_series_;
+  TimeSeriesState msg_ts_series_;
 
   double message_latency_msg_ms_{std::numeric_limits<double>::quiet_NaN()};
   bool outdated_msg_{true};
@@ -480,7 +479,7 @@ private:
     }
   }
 
-  bool checkFpsJitter(TimeSourceState & source, int64_t timestamp_diff_us)
+  bool checkFpsJitter(TimeSeriesState & source, int64_t timestamp_diff_us)
   {
     if (diagnostics_config_.expected_dt_us <= 0) {
       return false;
@@ -511,7 +510,7 @@ private:
     return false;
   }
 
-  bool checkIncreasing(TimeSourceState & source, uint64_t current_timestamp_us)
+  bool checkIncreasing(TimeSeriesState & source, uint64_t current_timestamp_us)
   {
     if (!source.check_increasing) {
       return false;
@@ -536,7 +535,7 @@ private:
     return false;
   }
 
-  bool checkFpsWindow(TimeSourceState & source)
+  bool checkFpsWindow(TimeSeriesState & source)
   {
     if (expected_frequency_ <= 0.0 ||
       source.window.interarrival_us.empty() || !source.check_fps_window)
@@ -579,7 +578,7 @@ private:
   }
 
   bool updateTimeSource(
-    TimeSourceState & source,
+    TimeSeriesState & source,
     uint64_t current_timestamp_us)
   {
     if (source.prev_timestamp_us == std::numeric_limits<uint64_t>::min()) {

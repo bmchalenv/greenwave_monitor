@@ -123,6 +123,15 @@ Dashboards expect specific keys inside `DiagnosticStatus.values`, including:
 
 These are already emitted by `GreenwaveDiagnostics::publishDiagnostics()`. You can write your own publisher for greenwave compatible `/diagnostics`, but we don't guarantee schema stability for now.
 
+## Timestamp sources
+
+Greenwave diagnostics tracks two timestamp series for each monitored topic:
+
+- **Header timestamp** — the `stamp` field embedded in the message's `std_msgs/Header`. For sensor data this is typically set at acquisition time (e.g. when a camera frame is captured), making it more accurate than node receive time for characterizing true source frequency and jitter.
+- **Node receive time** — the wall-clock time when the ROS message callback fires, reflecting when the subscriber received the message including any network or queuing delays.
+
+Latency (`current_delay_from_realtime_ms`) is measured as the difference between the node receive time and the header timestamp. A large value indicates significant pipeline delay between capture and consumption.
+
 ## Time check presets
 
 The `gw_time_check_preset` node parameter controls which time-based checks run on each monitored topic. This is especially important for **headerless topics** (e.g. `std_msgs/String`), where message timestamps are not available and the monitor can optionally use node receive time instead.
