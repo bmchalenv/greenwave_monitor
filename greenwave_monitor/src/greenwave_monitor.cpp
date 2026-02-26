@@ -84,8 +84,11 @@ GreenwaveMonitor::GreenwaveMonitor(const rclcpp::NodeOptions & options)
     time_check_preset_str != kTimestampModeNone)
   {
     RCLCPP_WARN(
-      this->get_logger(), "Invalid time check preset '%s', using default '%s'",
-      time_check_preset_str.c_str(), kTimestampModeHeaderWithFallback);
+      this->get_logger(), "Invalid time check preset '%s', using default '%s'. Valid presets are: "
+      "%s, %s, %s, %s",
+      time_check_preset_str.c_str(), kTimestampModeHeaderWithFallback,
+      kTimestampModeHeaderWithFallback, kTimestampModeHeaderOnly, kTimestampModeNodetimeOnly,
+      kTimestampModeNone);
     time_check_preset_ = greenwave_diagnostics::TimeCheckPreset::HeaderWithFallback;
   } else if (time_check_preset_ != greenwave_diagnostics::TimeCheckPreset::None) {
     RCLCPP_INFO(
