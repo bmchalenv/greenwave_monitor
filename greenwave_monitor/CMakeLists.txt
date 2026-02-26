@@ -20,8 +20,8 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 endif()
 
 # find dependencies
-find_package(ament_cmake REQUIRED)
 find_package(ament_cmake_auto REQUIRED)
+find_package(ament_cmake_target_dependencies REQUIRED)
 ament_auto_find_build_dependencies()
 
 # Add greenwave_diagnostics.hpp as a header-only library
