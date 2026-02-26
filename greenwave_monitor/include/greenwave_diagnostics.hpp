@@ -104,12 +104,12 @@ inline void applyTimeCheckPreset(
       config.enable_increasing_node_time_diagnostics = false;
       config.enable_msg_time_diagnostics = true;
       config.enable_fps_jitter_msg_time_diagnostics = true;
-      config.enable_fps_window_msg_time_diagnostics = true;
+      config.enable_fps_window_msg_time_diagnostics = false;
       config.enable_increasing_msg_time_diagnostics = true;
       break;
     case TimeCheckPreset::NodetimeOnly:
       config.enable_node_time_diagnostics = true;
-      config.enable_fps_jitter_node_time_diagnostics = true;
+      config.enable_fps_jitter_node_time_diagnostics = false;
       config.enable_fps_window_node_time_diagnostics = true;
       config.enable_increasing_node_time_diagnostics = true;
       config.enable_msg_time_diagnostics = false;
@@ -128,7 +128,7 @@ inline void applyTimeCheckPreset(
       config.enable_increasing_node_time_diagnostics = true;
       config.enable_msg_time_diagnostics = config.has_msg_timestamp;
       config.enable_fps_jitter_msg_time_diagnostics = config.has_msg_timestamp;
-      config.enable_fps_window_msg_time_diagnostics = config.has_msg_timestamp;
+      config.enable_fps_window_msg_time_diagnostics = false;
       config.enable_increasing_msg_time_diagnostics = config.has_msg_timestamp;
       break;
   }
@@ -168,9 +168,9 @@ public:
     msg_source_.prev_drop_ts = rclcpp::Time(0, 0, clock_->get_clock_type());
     msg_source_.prev_noninc_ts = rclcpp::Time(0, 0, clock_->get_clock_type());
     msg_source_.prev_fps_out_of_range_ts = rclcpp::Time(0, 0, clock_->get_clock_type());
-    msg_source_.drop_error_message = "FRAME DROP DETECTED (MESSAGE TIME)";
-    msg_source_.increasing_error_message = "NONINCREASING TIMESTAMP (MESSAGE TIME)";
-    msg_source_.fps_window_error_message = "FPS OUT OF RANGE (MESSAGE TIME)";
+    msg_source_.drop_error_message = "FRAME DROP DETECTED";
+    msg_source_.increasing_error_message = "NONINCREASING TIMESTAMP";
+    msg_source_.fps_window_error_message = "FPS OUT OF RANGE";
 
     diagnostic_msgs::msg::DiagnosticStatus topic_status;
     topic_status.name = topic_name;
@@ -463,7 +463,6 @@ private:
   rclcpp::Node & node_;
   std::string topic_name_;
   GreenwaveDiagnosticsConfig diagnostics_config_;
-  GreenwaveDiagnosticsConfig prev_diagnostics_config_;
   std::vector<diagnostic_msgs::msg::DiagnosticStatus> status_vec_;
   rclcpp::Clock::SharedPtr clock_;
   rclcpp::Time t_start_;
