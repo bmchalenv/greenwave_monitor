@@ -38,6 +38,7 @@ repos:
   rev: 1.6.1
   hooks:
     - id: copyright-required
+      stages: [pre-commit]
       exclude: '(^\.git/|(\.ini|\.json|\.service|__init__\.py|\.md|\.gitkeep|\.conf|LICENSE|\.toml|\.template|\.style\..*|\.gitattributes|\.gitignore|\.editorconfig|\.bash-completion|\.install|\.links|changelog|debian/source/format|.codespellrc|copyright|ament_code_style\.cfg|test_pep257\.py|test_flake8\.py|test_copyright\.py)$)'
 - repo: local
   hooks:

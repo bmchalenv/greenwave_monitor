@@ -23,6 +23,8 @@ import tempfile
 import time
 import unittest
 
+from diagnostic_msgs.msg import DiagnosticArray, DiagnosticStatus
+
 from greenwave_monitor.test_utils import (
     call_manage_topic_service,
     collect_diagnostics_for_topic,
@@ -414,6 +416,51 @@ class TestGreenwaveMonitor(unittest.TestCase):
             len(nonexistent_diagnostics), 0,
             f'Topic {NONEXISTENT_TOPIC} should not be monitored'
         )
+
+    def test_reject_externally_diagnosed_topic(
+            self, expected_frequency, message_type, tolerance_hz):
+        """Test that add_topic() fails when the topic already has external diagnostics.
+
+        Verifies the fix for issue #23: Greenwave Monitor should not create a duplicate
+        diagnostics object when an external node is already publishing diagnostics for
+        the same topic on /diagnostics.
+        """
+        if (message_type, expected_frequency, tolerance_hz) != MANAGE_TOPIC_TEST_CONFIG:
+            self.skipTest('Only running external diagnostics test once')
+
+        service_client = self.check_node_launches_successfully()
+
+        external_topic = '/external_diag_topic'
+
+        # Publish several DiagnosticArray messages for the external topic so the
+        # Greenwave Monitor's /diagnostics subscriber can detect them.
+        diag_pub = self.test_node.create_publisher(DiagnosticArray, '/diagnostics', 10)
+        try:
+            end_time = time.time() + 3.0
+            while time.time() < end_time:
+                msg = DiagnosticArray()
+                status = DiagnosticStatus()
+                status.name = external_topic
+                status.level = DiagnosticStatus.OK
+                status.message = 'External publisher'
+                msg.status = [status]
+                diag_pub.publish(msg)
+                rclpy.spin_once(self.test_node, timeout_sec=0.1)
+
+            # Greenwave Monitor should refuse to add the topic because an external
+            # node is already publishing diagnostics for it.
+            response = self.call_manage_topic(
+                add=True, topic=external_topic, service_client=service_client)
+            self.assertFalse(
+                response.success,
+                'add_topic() should fail when external diagnostics already exist for the topic'
+            )
+            self.assertIn(
+                'external', response.message.lower(),
+                'Error message should mention external diagnostics'
+            )
+        finally:
+            self.test_node.destroy_publisher(diag_pub)
 
 
 if __name__ == '__main__':
