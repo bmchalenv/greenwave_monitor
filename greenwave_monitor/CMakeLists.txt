@@ -30,13 +30,13 @@ target_include_directories(greenwave_diagnostics INTERFACE
   $<INSTALL_INTERFACE:include>)
 
 add_executable(greenwave_monitor src/greenwave_monitor.cpp src/greenwave_monitor_main.cpp)
-ament_target_dependencies(greenwave_monitor
-  rclcpp
-  std_msgs
-  diagnostic_msgs
-  greenwave_monitor_interfaces
+target_link_libraries(greenwave_monitor
+  greenwave_diagnostics
+  ${rclcpp_TARGETS}
+  ${std_msgs_TARGETS}
+  ${diagnostic_msgs_TARGETS}
+  ${greenwave_monitor_interfaces_TARGETS}
 )
-target_link_libraries(greenwave_monitor greenwave_diagnostics)
 
 target_include_directories(greenwave_monitor PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -50,8 +50,13 @@ install(TARGETS greenwave_monitor
 add_executable(minimal_publisher_node
   src/minimal_publisher_node.cpp
   src/minimal_publisher_main.cpp)
-ament_target_dependencies(minimal_publisher_node rclcpp std_msgs sensor_msgs diagnostic_msgs)
-target_link_libraries(minimal_publisher_node greenwave_diagnostics)
+target_link_libraries(minimal_publisher_node
+  greenwave_diagnostics
+  ${rclcpp_TARGETS}
+  ${std_msgs_TARGETS}
+  ${sensor_msgs_TARGETS}
+  ${diagnostic_msgs_TARGETS}
+)
 target_include_directories(minimal_publisher_node PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
@@ -62,8 +67,12 @@ install(TARGETS minimal_publisher_node
 add_executable(example_greenwave_publisher_node
   src/example_greenwave_publisher_node.cpp
   src/example_greenwave_publisher_main.cpp)
-ament_target_dependencies(example_greenwave_publisher_node rclcpp sensor_msgs diagnostic_msgs)
-target_link_libraries(example_greenwave_publisher_node greenwave_diagnostics)
+target_link_libraries(example_greenwave_publisher_node
+  greenwave_diagnostics
+  ${rclcpp_TARGETS}
+  ${sensor_msgs_TARGETS}
+  ${diagnostic_msgs_TARGETS}
+)
 target_include_directories(example_greenwave_publisher_node PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
@@ -133,12 +142,12 @@ if(BUILD_TESTING)
     TIMEOUT 60
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   )
-  ament_target_dependencies(test_greenwave_diagnostics
-    rclcpp
-    std_msgs
-    diagnostic_msgs
+  target_link_libraries(test_greenwave_diagnostics
+    greenwave_diagnostics
+    ${rclcpp_TARGETS}
+    ${std_msgs_TARGETS}
+    ${diagnostic_msgs_TARGETS}
   )
-  target_link_libraries(test_greenwave_diagnostics greenwave_diagnostics)
   target_include_directories(test_greenwave_diagnostics PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
@@ -151,12 +160,12 @@ if(BUILD_TESTING)
     TIMEOUT 60
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   )
-  ament_target_dependencies(test_minimal_publisher
-    rclcpp
-    sensor_msgs
-    diagnostic_msgs
+  target_link_libraries(test_minimal_publisher
+    greenwave_diagnostics
+    ${rclcpp_TARGETS}
+    ${sensor_msgs_TARGETS}
+    ${diagnostic_msgs_TARGETS}
   )
-  target_link_libraries(test_minimal_publisher greenwave_diagnostics)
   target_include_directories(test_minimal_publisher PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
@@ -169,12 +178,12 @@ if(BUILD_TESTING)
     TIMEOUT 60
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   )
-  ament_target_dependencies(test_example_greenwave_publisher
-    rclcpp
-    sensor_msgs
-    diagnostic_msgs
+  target_link_libraries(test_example_greenwave_publisher
+    greenwave_diagnostics
+    ${rclcpp_TARGETS}
+    ${sensor_msgs_TARGETS}
+    ${diagnostic_msgs_TARGETS}
   )
-  target_link_libraries(test_example_greenwave_publisher greenwave_diagnostics)
   target_include_directories(test_example_greenwave_publisher PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
