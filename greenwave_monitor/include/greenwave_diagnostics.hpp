@@ -155,6 +155,8 @@ public:
     node_source_.prev_drop_ts = rclcpp::Time(0, 0, clock_->get_clock_type());
     node_source_.prev_noninc_ts = rclcpp::Time(0, 0, clock_->get_clock_type());
     node_source_.prev_fps_out_of_range_ts = rclcpp::Time(0, 0, clock_->get_clock_type());
+    node_source_.drop_error_message = "FRAME DROP DETECTED (NODE TIME)";
+    node_source_.increasing_error_message = "NONINCREASING TIMESTAMP (NODE TIME)";
     node_source_.fps_window_error_message = "FPS OUT OF RANGE (NODE TIME)";
 
     msg_source_.label = "Message Time";
@@ -166,6 +168,8 @@ public:
     msg_source_.prev_drop_ts = rclcpp::Time(0, 0, clock_->get_clock_type());
     msg_source_.prev_noninc_ts = rclcpp::Time(0, 0, clock_->get_clock_type());
     msg_source_.prev_fps_out_of_range_ts = rclcpp::Time(0, 0, clock_->get_clock_type());
+    msg_source_.drop_error_message = "FRAME DROP DETECTED (MESSAGE TIME)";
+    msg_source_.increasing_error_message = "NONINCREASING TIMESTAMP (MESSAGE TIME)";
     msg_source_.fps_window_error_message = "FPS OUT OF RANGE (MESSAGE TIME)";
 
     diagnostic_msgs::msg::DiagnosticStatus topic_status;
