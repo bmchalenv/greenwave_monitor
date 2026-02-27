@@ -345,10 +345,10 @@ bool GreenwaveMonitor::add_topic(
   {
     std::lock_guard<std::mutex> lock(externally_diagnosed_topics_mutex_);
     if (externally_diagnosed_topics_.count(topic) > 0) {
-      message = "Topic already externally monitored";
+      message = "Topic is externally monitored";
       RCLCPP_ERROR(
         this->get_logger(),
-        "Refusing to add topic '%s': topic already externally monitored",
+        "Refusing to add topic '%s': topic is externally monitored",
         topic.c_str());
       return false;
     }
