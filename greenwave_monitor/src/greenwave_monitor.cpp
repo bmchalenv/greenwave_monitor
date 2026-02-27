@@ -345,10 +345,10 @@ bool GreenwaveMonitor::add_topic(
   {
     std::lock_guard<std::mutex> lock(externally_diagnosed_topics_mutex_);
     if (externally_diagnosed_topics_.count(topic) > 0) {
-      message = "Topic already externally monitored";
+      message = "Topic is externally monitored";
       RCLCPP_ERROR(
         this->get_logger(),
-        "Refusing to add topic '%s': topic already externally monitored",
+        "Refusing to add topic '%s': topic is externally monitored",
         topic.c_str());
       return false;
     }
@@ -364,7 +364,7 @@ bool GreenwaveMonitor::add_topic(
 
   auto maybe_type = find_topic_type(topic, max_retries, retry_wait_s);
   if (!maybe_type.has_value()) {
-    RCLCPP_ERROR(this->get_logger(), "Failed to find type for topic '%s'", topic.c_str());
+    RCLCPP_WARN(this->get_logger(), "Failed to find type for topic '%s'", topic.c_str());
     message = "Failed to find type for topic";
     return false;
   }
@@ -400,7 +400,7 @@ bool GreenwaveMonitor::remove_topic(const std::string & topic, std::string & mes
     std::lock_guard<std::mutex> lock(externally_diagnosed_topics_mutex_);
     if (externally_diagnosed_topics_.count(topic) > 0) {
       message = "Topic is externally monitored";
-      RCLCPP_ERROR(
+      RCLCPP_WARN(
         this->get_logger(),
         "Refusing to remove topic '%s': topic is externally monitored",
         topic.c_str());
