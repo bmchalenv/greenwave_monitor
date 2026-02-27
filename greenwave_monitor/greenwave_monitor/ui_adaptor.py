@@ -203,14 +203,14 @@ class GreenwaveUiAdaptor:
 
             if future.result() is None:
                 error_msg = f'Failed to {action} monitoring: Service call timed out'
-                self.node.get_logger().debug(error_msg)
+                self.node.get_logger().error(error_msg)
                 return False, error_msg
 
             response = future.result()
 
             if not response.success:
                 error_msg = f'Failed to {action} monitoring: {response.message}'
-                self.node.get_logger().debug(error_msg)
+                self.node.get_logger().error(error_msg)
                 return False, error_msg
 
             with self.data_lock:
@@ -223,7 +223,7 @@ class GreenwaveUiAdaptor:
 
         except Exception as e:
             error_msg = f'Failed to {action} monitoring: {e}'
-            self.node.get_logger().debug(error_msg)
+            self.node.get_logger().error(error_msg)
             return False, error_msg
 
     def set_expected_frequency(self,
@@ -251,14 +251,14 @@ class GreenwaveUiAdaptor:
             if future.result() is None:
                 action = 'clear' if clear else 'set'
                 error_msg = f'Failed to {action} expected frequency: Service call timed out'
-                self.node.get_logger().debug(error_msg)
+                self.node.get_logger().error(error_msg)
                 return False, error_msg
 
             response = future.result()
 
             if not response.success:
                 action = 'clear' if clear else 'set'
-                self.node.get_logger().debug(
+                self.node.get_logger().error(
                     f'Failed to {action} expected frequency: {response.message}')
                 return False, response.message
             else:
@@ -271,7 +271,7 @@ class GreenwaveUiAdaptor:
         except Exception as e:
             action = 'clear' if clear else 'set'
             error_msg = f'Failed to {action} expected frequency: {e}'
-            self.node.get_logger().debug(error_msg)
+            self.node.get_logger().error(error_msg)
             return False, error_msg
 
     def get_topic_diagnostics(self, topic_name: str) -> UiDiagnosticData:

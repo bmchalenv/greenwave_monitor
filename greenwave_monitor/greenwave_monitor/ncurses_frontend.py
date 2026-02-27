@@ -476,6 +476,7 @@ def parse_args(args=None):
 def main(args=None):
     """Entry point for the ncurses frontend application."""
     parsed_args, ros_args = parse_args(args)
+    ros_args.extend(['--ros-args', '--disable-stdout-logs'])
     rclpy.init(args=ros_args)
     node = GreenwaveNcursesFrontend(hide_unmonitored=parsed_args.hide_unmonitored)
     thread = None
