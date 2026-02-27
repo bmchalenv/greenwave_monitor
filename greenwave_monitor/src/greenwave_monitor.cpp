@@ -397,6 +397,18 @@ bool GreenwaveMonitor::add_topic(
 
 bool GreenwaveMonitor::remove_topic(const std::string & topic, std::string & message)
 {
+  {
+    std::lock_guard<std::mutex> lock(externally_diagnosed_topics_mutex_);
+    if (externally_diagnosed_topics_.count(topic) > 0) {
+      message = "Topic '" + topic + "' is externally managed and cannot be removed";
+      RCLCPP_ERROR(
+        this->get_logger(),
+        "Refusing to remove topic '%s': topic is externally managed",
+        topic.c_str());
+      return false;
+    }
+  }
+
   auto diag_it = greenwave_diagnostics_.find(topic);
   if (diag_it == greenwave_diagnostics_.end()) {
     message = "Topic not found";
