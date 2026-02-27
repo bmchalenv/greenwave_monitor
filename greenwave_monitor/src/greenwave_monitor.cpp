@@ -340,25 +340,24 @@ bool GreenwaveMonitor::has_header_from_type(const std::string & type_name)
 bool GreenwaveMonitor::add_topic(
   const std::string & topic, std::string & message, int max_retries, double retry_wait_s)
 {
-  // Check if topic already exists
-  if (greenwave_diagnostics_.find(topic) != greenwave_diagnostics_.end()) {
-    message = "Topic already being monitored";
-    return false;
-  }
-
   // Check if an external node is already publishing diagnostics for this topic.
   // Adding a duplicate would create redundant and potentially conflicting diagnostics.
   {
     std::lock_guard<std::mutex> lock(externally_diagnosed_topics_mutex_);
     if (externally_diagnosed_topics_.count(topic) > 0) {
-      message = "Topic '" + topic +
-        "' already has diagnostics published externally on /diagnostics";
+      message = "Topic already externally monitored";
       RCLCPP_ERROR(
         this->get_logger(),
-        "Refusing to add topic '%s': diagnostics already published externally on /diagnostics",
+        "Refusing to add topic '%s': topic already externally monitored",
         topic.c_str());
       return false;
     }
+  }
+
+  // Check if topic already exists
+  if (greenwave_diagnostics_.find(topic) != greenwave_diagnostics_.end()) {
+    message = "Topic already being monitored";
+    return false;
   }
 
   RCLCPP_INFO(this->get_logger(), "Adding subscription for topic '%s'", topic.c_str());
@@ -400,10 +399,10 @@ bool GreenwaveMonitor::remove_topic(const std::string & topic, std::string & mes
   {
     std::lock_guard<std::mutex> lock(externally_diagnosed_topics_mutex_);
     if (externally_diagnosed_topics_.count(topic) > 0) {
-      message = "Topic '" + topic + "' is externally managed and cannot be removed";
+      message = "Topic is externally monitored";
       RCLCPP_ERROR(
         this->get_logger(),
-        "Refusing to remove topic '%s': topic is externally managed",
+        "Refusing to remove topic '%s': topic is externally monitored",
         topic.c_str());
       return false;
     }

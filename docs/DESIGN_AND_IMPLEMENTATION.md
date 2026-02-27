@@ -161,7 +161,6 @@ Invalid values are ignored and the default `header_with_nodetime_fallback` is us
   `GreenwaveMonitor::has_header_from_type()`; unknown types fall back to no-header behavior.
 - `publishDiagnostics()` marks status as `STALE` if no fresh `updateDiagnostics()` happened since the previous publish.
 - `setExpectedDt()` requires `expected_hz > 0`; zero disables useful timing checks.
-- Do not add externally monitored topics (those already using inline `GreenwaveDiagnostics`) via `manage_topic` or the terminal UI, as this will create a duplicate diagnostic subscription for the same topic.
 
 ## Where To Look In Code
 
