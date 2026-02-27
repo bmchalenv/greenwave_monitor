@@ -283,6 +283,8 @@ def curses_main(stdscr, node):
                 if 0 <= selected_row < len(node.visible_topics):
                     input_mode = 'frequency'
                     input_buffer = ''
+                    status_timeout = 0
+                    status_is_error = False
             elif key == ord('c') or key == ord('C'):
                 if 0 <= selected_row < len(node.visible_topics):
                     topic_name = node.visible_topics[selected_row]
