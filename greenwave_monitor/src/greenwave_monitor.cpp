@@ -99,6 +99,14 @@ GreenwaveMonitor::GreenwaveMonitor(const rclcpp::NodeOptions & options)
   timer_ = this->create_wall_timer(
     1s, std::bind(&GreenwaveMonitor::timer_callback, this));
 
+  // Subscribe to /diagnostics early so we can detect external publishers before
+  // deferred_init() adds topics. This gives us the best chance of catching
+  // externally-published diagnostics before add_topic() is called.
+  diagnostics_subscription_ =
+    this->create_subscription<diagnostic_msgs::msg::DiagnosticArray>(
+    "/diagnostics", 10,
+    std::bind(&GreenwaveMonitor::diagnostics_callback, this, std::placeholders::_1));
+
   // Defer topic discovery to allow the ROS graph to settle before querying other nodes
   init_timer_ = this->create_wall_timer(
     100ms, [this]() {
@@ -168,6 +176,19 @@ void GreenwaveMonitor::timer_callback()
       topic.c_str(), diagnostics->getLatency());
   }
   RCLCPP_INFO(this->get_logger(), "====================================================");
+}
+
+void GreenwaveMonitor::diagnostics_callback(
+  const diagnostic_msgs::msg::DiagnosticArray::SharedPtr msg)
+{
+  std::lock_guard<std::mutex> lock(externally_diagnosed_topics_mutex_);
+  for (const auto & status : msg->status) {
+    // Only track topic names that are not already monitored by us. This prevents
+    // our own published diagnostics from blocking re-adds after a remove_topic().
+    if (greenwave_diagnostics_.find(status.name) == greenwave_diagnostics_.end()) {
+      externally_diagnosed_topics_.insert(status.name);
+    }
+  }
 }
 
 void GreenwaveMonitor::handle_manage_topic(
@@ -319,6 +340,20 @@ bool GreenwaveMonitor::has_header_from_type(const std::string & type_name)
 bool GreenwaveMonitor::add_topic(
   const std::string & topic, std::string & message, int max_retries, double retry_wait_s)
 {
+  // Check if an external node is already publishing diagnostics for this topic.
+  // Adding a duplicate would create redundant and potentially conflicting diagnostics.
+  {
+    std::lock_guard<std::mutex> lock(externally_diagnosed_topics_mutex_);
+    if (externally_diagnosed_topics_.count(topic) > 0) {
+      message = "Topic is externally monitored";
+      RCLCPP_WARN(
+        this->get_logger(),
+        "Refusing to add topic '%s': topic is externally monitored",
+        topic.c_str());
+      return false;
+    }
+  }
+
   // Check if topic already exists
   if (greenwave_diagnostics_.find(topic) != greenwave_diagnostics_.end()) {
     message = "Topic already being monitored";
@@ -361,6 +396,18 @@ bool GreenwaveMonitor::add_topic(
 
 bool GreenwaveMonitor::remove_topic(const std::string & topic, std::string & message)
 {
+  {
+    std::lock_guard<std::mutex> lock(externally_diagnosed_topics_mutex_);
+    if (externally_diagnosed_topics_.count(topic) > 0) {
+      message = "Topic is externally monitored";
+      RCLCPP_WARN(
+        this->get_logger(),
+        "Refusing to remove topic '%s': topic is externally monitored",
+        topic.c_str());
+      return false;
+    }
+  }
+
   auto diag_it = greenwave_diagnostics_.find(topic);
   if (diag_it == greenwave_diagnostics_.end()) {
     message = "Topic not found";
